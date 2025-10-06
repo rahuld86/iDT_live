@@ -1,0 +1,11 @@
+Age,Income,Education,Experience,Location,Approved
+25,50000,Bachelor,2,Urban,Yes
+35,75000,Master,8,Suburban,Yes
+45,60000,High School,15,Rural,No
+28,45000,Bachelor,3,Urban,Yes
+52,85000,PhD,20,Suburban,Yes
+30,55000,Master,5,Urban,No
+40,70000,Bachelor,12,Suburban,Yes
+22,35000,High School,1,Urban,No
+48,90000,PhD,18,Rural,Yes
+33,60000,Master,7,Suburban,Yes
