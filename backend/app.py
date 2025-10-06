@@ -35,8 +35,14 @@ def df_to_json_safe(df):
     # Additional cleanup for any remaining NaN values
     for record in result:
         for key, value in record.items():
-            if pd.isna(value) if hasattr(pd, 'isna') else (value != value):  # NaN check
-                record[key] = None
+            # Check for NaN values safely
+            try:
+                if pd.isna(value):
+                    record[key] = None
+            except (TypeError, ValueError):
+                # If pd.isna fails (e.g., for non-numeric types), check if value is NaN using != comparison
+                if isinstance(value, float) and value != value:  # NaN check for floats
+                    record[key] = None
     
     return result
 
