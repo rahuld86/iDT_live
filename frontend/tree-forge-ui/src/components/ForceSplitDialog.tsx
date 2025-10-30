@@ -19,7 +19,8 @@ import CategoricalSplitsDialog from './CategoricalSplitsDialog';
 
 interface VariableWithIV {
   variable: string;
-  iv: number;
+  iv?: number; // For classification problems
+  rmse?: number; // For regression problems
 }
 
 interface ForceSplitDialogProps {
@@ -38,6 +39,7 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
   const [variables, setVariables] = useState<VariableWithIV[]>([]);
   const [selectedVariable, setSelectedVariable] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRegression, setIsRegression] = useState(false);
   const [bestSplitsDialog, setBestSplitsDialog] = useState<{
     isOpen: boolean;
     variableName: string;
@@ -65,13 +67,27 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
   const fetchVariables = async () => {
     try {
       setIsLoading(true);
+      
+      // First, check if this is a regression problem
+      const regressionResponse = await apiService.getRegressionFlag();
+      const isRegressionProblem = regressionResponse.regression_flag === 1;
+      setIsRegression(isRegressionProblem);
+      
       const response = await apiService.findVar(nodeNumber);
       
-      // Sort variables by IV in descending order (API should already return sorted, but just in case)
-      const sortedVariables = response.top_vars.sort((a, b) => b.iv - a.iv);
+      // Sort variables based on problem type
+      let sortedVariables;
+      if (isRegressionProblem) {
+        // For regression, sort by RMSE in ascending order (lower RMSE is better)
+        sortedVariables = response.top_vars.sort((a, b) => (a.rmse || 0) - (b.rmse || 0));
+      } else {
+        // For classification, sort by IV in descending order (higher IV is better)
+        sortedVariables = response.top_vars.sort((a, b) => (b.iv || 0) - (a.iv || 0));
+      }
+      
       setVariables(sortedVariables);
       
-      // Auto-select the first variable (highest IV)
+      // Auto-select the first variable (best performing)
       if (sortedVariables.length > 0) {
         setSelectedVariable(sortedVariables[0].variable);
       }
@@ -174,10 +190,20 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
     return iv.toFixed(4);
   };
 
+  const formatRMSE = (rmse: number) => {
+    return rmse.toFixed(4);
+  };
+
   const getIVBadgeVariant = (iv: number) => {
     if (iv >= 0.3) return 'default'; // High IV
     if (iv >= 0.1) return 'secondary'; // Medium IV
     return 'outline'; // Low IV
+  };
+
+  const getRMSEBadgeVariant = (rmse: number) => {
+    if (rmse <= 0.1) return 'default'; // Low RMSE (good)
+    if (rmse <= 0.5) return 'secondary'; // Medium RMSE
+    return 'outline'; // High RMSE (not as good)
   };
 
   return (
@@ -187,7 +213,7 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
           <DialogHeader>
             <DialogTitle>Force Split - Node {nodeNumber}</DialogTitle>
             <DialogDescription>
-              Select a variable to force a split on this node. Variables are sorted by Information Value (IV) in descending order.
+              Select a variable to force a split on this node. Variables are sorted by {isRegression ? 'RMSE in ascending order' : 'Information Value (IV) in descending order'}.
             </DialogDescription>
           </DialogHeader>
 
@@ -207,7 +233,7 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
                 <div className="grid grid-cols-12 gap-4 px-4 py-2 text-sm font-medium text-muted-foreground border-b">
                   <div className="col-span-1"></div> {/* Radio button column */}
                   <div className="col-span-8">Variable</div>
-                  <div className="col-span-3 text-right">IV</div>
+                  <div className="col-span-3 text-right">{isRegression ? 'RMSE' : 'IV'}</div>
                 </div>
                 
                 <RadioGroup
@@ -234,8 +260,8 @@ const ForceSplitDialog: React.FC<ForceSplitDialogProps> = ({
                             </Label>
                           </div>
                           <div className="col-span-3 text-right">
-                            <Badge variant={getIVBadgeVariant(variable.iv)}>
-                              {formatIV(variable.iv)}
+                            <Badge variant={isRegression ? getRMSEBadgeVariant(variable.rmse || 0) : getIVBadgeVariant(variable.iv || 0)}>
+                              {isRegression ? formatRMSE(variable.rmse || 0) : formatIV(variable.iv || 0)}
                             </Badge>
                           </div>
                         </div>

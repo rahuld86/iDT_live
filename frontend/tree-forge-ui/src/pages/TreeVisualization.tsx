@@ -63,6 +63,7 @@ const TreeVisualization = () => {
   const [nodeMaster, setNodeMaster] = useState<NodeMasterData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set([1])); // Root node expanded by default
+  const [regressionFlag, setRegressionFlag] = useState<number>(0); // 0 = Binary Classification, 1 = Regression
   
   // Pinch zoom state
   const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
@@ -437,6 +438,19 @@ FROM your_table;
     }
   };
 
+  // Fetch regression flag from import diagnostics
+  const fetchRegressionFlag = async () => {
+    try {
+      const diagnostics = await apiService.getImportDiagnostics();
+      setRegressionFlag(diagnostics.hyperparameters.regression_flag || 0);
+      console.log('Regression flag loaded:', diagnostics.hyperparameters.regression_flag);
+    } catch (error) {
+      console.error('Error fetching regression flag:', error);
+      // Default to classification if we can't fetch the flag
+      setRegressionFlag(0);
+    }
+  };
+
   useEffect(() => {
     // Check if we have imported data from navigation state
     const importedData = location.state?.importedData;
@@ -456,6 +470,9 @@ FROM your_table;
       // Fetch tree data from API as usual
       fetchTreeData();
     }
+    
+    // Always fetch regression flag
+    fetchRegressionFlag();
   }, [toast, location.state]);
 
   const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.2, 2));
@@ -773,6 +790,7 @@ FROM your_table;
               }}
               colorConfig={colorConfig}
               onTreeRefresh={fetchTreeData}
+              regressionFlag={regressionFlag}
             />
           </div>
         )}

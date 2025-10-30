@@ -26,11 +26,23 @@ const TreeAttributesDialog = ({
   const { toast } = useToast();
   const [attributes, setAttributes] = useState<TreeAttributes>(currentAttributes);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [regressionFlag, setRegressionFlag] = useState<number>(0);
 
   // Update local state when dialog opens with new current attributes
   useEffect(() => {
     if (isOpen) {
       setAttributes(currentAttributes);
+      // Fetch regression flag to toggle criteria options
+      apiService.getRegressionFlag()
+        .then((res) => {
+          const flag = res?.regression_flag ?? 0;
+          setRegressionFlag(flag);
+          // Force criteria to RMSE when regression
+          if (flag === 1 && attributes.criteria.toLowerCase() !== 'rmse') {
+            setAttributes(prev => ({ ...prev, criteria: 'rmse' }));
+          }
+        })
+        .catch(() => setRegressionFlag(0));
     }
   }, [isOpen, currentAttributes]);
 
@@ -191,15 +203,26 @@ const TreeAttributesDialog = ({
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <Select value={attributes.criteria} onValueChange={(value) => handleAttributeChange('criteria', value)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="entropy">Entropy</SelectItem>
-                  <SelectItem value="gini">Gini</SelectItem>
-                </SelectContent>
-              </Select>
+              {regressionFlag === 1 ? (
+                <Select value={attributes.criteria} onValueChange={(value) => handleAttributeChange('criteria', value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rmse">RMSE</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Select value={attributes.criteria} onValueChange={(value) => handleAttributeChange('criteria', value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="entropy">Entropy</SelectItem>
+                    <SelectItem value="gini">Gini</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             
             <div className="space-y-2">

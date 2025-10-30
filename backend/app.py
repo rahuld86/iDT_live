@@ -9,7 +9,7 @@ from datetime import datetime
 from util import (
     init_setup, build_tree, del_subtree, build_tree_node, split_node, 
     find_var, best_split, eval_split, add_nodes, copy_node_wrapper, 
-    add_label, classify_dtype, create_node_datasets
+    add_label, classify_dtype, create_node_datasets, find_var_regression, best_split_regression
 )
 
 def df_to_json_safe(df):
@@ -35,14 +35,19 @@ def df_to_json_safe(df):
     # Additional cleanup for any remaining NaN values
     for record in result:
         for key, value in record.items():
-            # Check for NaN values safely
+            # Skip NA check for container types; lists (e.g., list_values) are valid JSON
+            if isinstance(value, (list, tuple, dict)):
+                continue
             try:
-                if pd.isna(value):
+                is_na = pd.isna(value) if hasattr(pd, 'isna') else (value != value)
+                # If is_na is array-like, treat as not-NA to avoid ambiguous truth
+                if isinstance(is_na, (np.ndarray, pd.Series)):
+                    is_na = False
+                if is_na:
                     record[key] = None
-            except (TypeError, ValueError):
-                # If pd.isna fails (e.g., for non-numeric types), check if value is NaN using != comparison
-                if isinstance(value, float) and value != value:  # NaN check for floats
-                    record[key] = None
+            except Exception:
+                # On any check failure, leave the value as-is
+                pass
     
     return result
 
@@ -71,6 +76,7 @@ class TreeState:
         self.criteria = "entropy"
         self.unique_var = 0
         self.monotonous = 0
+        self.regression_flag = 0
 
 # Initialize global state
 tree_state = TreeState()
@@ -515,7 +521,8 @@ def getImportDiagnostics():
                 'max_branches': tree_state.max_branches,
                 'criteria': tree_state.criteria,
                 'unique_var': tree_state.unique_var,
-                'monotonous': tree_state.monotonous
+                'monotonous': tree_state.monotonous,
+                'regression_flag': tree_state.regression_flag
             },
             'feature_columns': list(tree_state.X_col) if tree_state.X_col is not None else [],
             'df_for_tree_shape': tree_state.df_for_tree.shape if tree_state.df_for_tree is not None else None
@@ -656,6 +663,8 @@ def setTarget():
             return handle_error(error_msg, 400)
         
         target = data.get("target")
+        regression_flag = data.get("regression_flag")
+        
         
         # Validate target exists in dataframe
         if tree_state.df is None:
@@ -665,9 +674,18 @@ def setTarget():
             return handle_error(f"Target variable '{target}' not found in data", 400)
         
         tree_state.badflag = target
+        tree_state.regression_flag = regression_flag
         
         return jsonify({"message": f"Target variable set to {target}"})
     
+    except Exception as e:
+        return handle_error(str(e))
+
+@app.route('/api/getRegressionFlag', methods=['GET'])
+def getRegressionFlag():
+    """Return current regression/classification mode flag"""
+    try:
+        return jsonify({"regression_flag": tree_state.regression_flag})
     except Exception as e:
         return handle_error(str(e))
 
@@ -802,7 +820,7 @@ def autoTree():
         tree_state.node_master, tree_state.node_datasets = build_tree(
             tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
             tree_state.min_node_split, tree_state.min_leaf_size, 
-            tree_state.max_branches, tree_state.df_col
+            tree_state.max_branches, tree_state.df_col, tree_state.regression_flag
         )
         
         return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
@@ -896,7 +914,7 @@ def autoTrainSubTree():
             tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
             tree_state.min_node_split, tree_state.min_leaf_size, 
             tree_state.max_branches, node_number, tree_state.X_col, 
-            tree_state.node_master, tree_state.node_datasets, tree_state.df_col
+            tree_state.node_master, tree_state.node_datasets, tree_state.df_col, tree_state.regression_flag
         )
         print("build_tree_node completed successfully")
         
@@ -930,7 +948,7 @@ def findSplit():
         tree_state.node_master, tree_state.node_datasets = split_node(
             node_number, tree_state.min_leaf_size, tree_state.max_branches, 
             tree_state.max_depth, tree_state.min_node_split, tree_state.X_col, 
-            tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col
+            tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col, tree_state.regression_flag
         )
         
         return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
@@ -956,10 +974,16 @@ def findVar():
         if tree_state.node_datasets is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
         
-        top_vars = find_var(
-            node_number, tree_state.node_datasets, tree_state.X_col, 
-            'badflag', tree_state.df_col
-        )
+        if tree_state.regression_flag == 0:
+            top_vars = find_var(
+                node_number, tree_state.node_datasets, tree_state.X_col, 
+                'badflag', tree_state.df_col
+            )
+        else:
+            top_vars = find_var_regression(
+                node_number, tree_state.node_datasets, tree_state.X_col, 
+                'badflag', tree_state.df_col
+            )
         
         return jsonify({"top_vars": df_to_json_safe(top_vars)})
     
@@ -985,11 +1009,18 @@ def bestSplit():
         if tree_state.node_datasets is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
         
-        df_out = best_split(
-            node_number, tree_state.node_datasets, tree_state.X_col, 
-            'badflag', variable_name, tree_state.min_leaf_size, 
-            tree_state.max_branches, tree_state.df_col
-        )
+        if tree_state.regression_flag == 0:
+            df_out = best_split(
+                node_number, tree_state.node_datasets, tree_state.X_col, 
+                'badflag', variable_name, tree_state.min_leaf_size, 
+                tree_state.max_branches, tree_state.df_col
+            )
+        else:
+            df_out = best_split_regression(
+                node_number, tree_state.node_datasets, tree_state.X_col, 
+                'badflag', variable_name, tree_state.min_leaf_size, 
+                tree_state.max_branches, tree_state.df_col
+            )
         
         return jsonify({"best_split": df_to_json_safe(df_out)})
     
@@ -1032,8 +1063,34 @@ def evalSplit():
         if 'list_values' not in df.columns:
             df['list_values'] = [[] for _ in range(len(df))]  # Default empty list
         else:
-            # Ensure list_values are properly formatted as lists
-            df['list_values'] = df['list_values'].apply(lambda x: x if isinstance(x, list) else [x] if x is not None else [])
+            # Ensure list_values are properly formatted as flat lists of scalars
+            def normalize_list_values(x):
+                if x is None:
+                    return []
+                if isinstance(x, list):
+                    # If contains numpy arrays/Series, flatten them
+                    out = []
+                    for v in x:
+                        try:
+                            import numpy as np
+                            import pandas as pd
+                            if isinstance(v, (np.ndarray, pd.Series)):
+                                out.extend(list(v))
+                            else:
+                                out.append(v)
+                        except Exception:
+                            out.append(v)
+                    return out
+                try:
+                    import numpy as np
+                    import pandas as pd
+                    if isinstance(x, (np.ndarray, pd.Series)):
+                        return list(x)
+                except Exception:
+                    pass
+                return [x]
+
+            df['list_values'] = df['list_values'].apply(normalize_list_values)
         
         df_out = eval_split(node_number, tree_state.node_datasets, 'badflag', df, tree_state.df_col)
         
@@ -1076,6 +1133,34 @@ def addNode():
         # Use list_values from input data if provided, otherwise default to empty list
         if 'list_values' not in df.columns:
             df['list_values'] = [[] for _ in range(len(df))]
+        else:
+            # Normalize list_values to flat lists of scalars
+            def normalize_list_values(x):
+                if x is None:
+                    return []
+                if isinstance(x, list):
+                    out = []
+                    for v in x:
+                        try:
+                            import numpy as np
+                            import pandas as pd
+                            if isinstance(v, (np.ndarray, pd.Series)):
+                                out.extend(list(v))
+                            else:
+                                out.append(v)
+                        except Exception:
+                            out.append(v)
+                    return out
+                try:
+                    import numpy as np
+                    import pandas as pd
+                    if isinstance(x, (np.ndarray, pd.Series)):
+                        return list(x)
+                except Exception:
+                    pass
+                return [x]
+
+            df['list_values'] = df['list_values'].apply(normalize_list_values)
         
         tree_state.node_master, tree_state.node_datasets = add_nodes(
             df, node_number, tree_state.max_depth, tree_state.min_node_split, 

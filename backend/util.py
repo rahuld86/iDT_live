@@ -5,6 +5,29 @@ import re
 import warnings
 warnings.filterwarnings('ignore')
 
+def is_na_like(value):
+    """Return True if value should be treated as missing/empty.
+    Handles scalars, strings, lists, numpy arrays without causing
+    ambiguous truth-value errors.
+    """
+    # Treat empty list/array as NA-like
+    if isinstance(value, (list, tuple, set)):
+        return len(value) == 0
+    if isinstance(value, np.ndarray):
+        return value.size == 0
+    # For scalars/strings, defer to pandas isna
+    try:
+        result = pd.isna(value)
+        # If result is an array/Series, reduce deterministically
+        if isinstance(result, (np.ndarray, pd.Series)):
+            if result.size == 0:
+                return True
+            # Treat NA-like if all elements are NA-like
+            return bool(np.all(result))
+        return bool(result)
+    except Exception:
+        return False
+
 def init_setup(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches):
     dataset = input_path
     X_col = dataset.drop([event_flag], axis=1).columns
@@ -90,18 +113,49 @@ def add_bins(X, y, var_name):
             df4=df4.sort_values('bins').reset_index(drop=True)
         track = 2
     df4['non_events']=df4['count']-df4['sum']
-    if df4['sum'].sum() == 0:
-        df4['events_pct']=0
-    else:
-        df4['events_pct']=df4['sum']/df4['sum'].sum()
-    if df4['non_events'].sum() == 0:
-        df4['nonevent_pct']=0
-    else:
-        df4['nonevent_pct']=df4['non_events']/df4['non_events'].sum()
+    df4['events_pct']=df4['sum']/df4['sum'].sum()
+    df4['nonevent_pct']=df4['non_events']/df4['non_events'].sum()
     df4['woe']=df4.apply(lambda x: 0 if ((x['events_pct']== 0) or (x['nonevent_pct'] == 0)) else np.log(x['nonevent_pct']/x['events_pct']), axis=1)
     df4['for_iv']=(df4['nonevent_pct']-df4['events_pct'])*df4['woe']
     iv_calc=df4['for_iv'].sum()
     return iv_calc, df4, track
+
+def add_bins_regression(X, y, var_name):
+    data=pd.DataFrame(X[var_name])
+    data['badflag']=y
+    if len(pd.unique(data[var_name])) > 20:
+        df1=pd.qcut(data[var_name],q=20,duplicates='drop')
+        df2=pd.DataFrame(df1)
+        df2.columns=['bins']
+        df2=df2.join(data[['badflag',var_name]])
+        if data[var_name].isna().sum() > 0:
+            df2["bins"] = df2["bins"].cat.add_categories("Missing")
+            df2.loc[df2['bins'].isna(), 'bins'] = 'Missing'
+            new_order = ["Missing"] + list(df2["bins"].cat.categories.drop("Missing"))
+            df2["bins"] = df2["bins"].cat.reorder_categories(new_order, ordered=True)
+        #df2['bins']=df2['bins'].astype('string')
+        df3=df2.groupby('bins')['badflag'].agg(['count', 'sum'])
+        df3['average'] = df3.apply(lambda x: 0 if x['count']==0 else x['sum']/x['count'], axis=1)
+        df4=df3.reset_index()
+        df4['variable']=var_name
+        df4.columns=['bins','count','sum','average','variable']
+        df5 = pd.merge(df2, df4[['bins','average']], on='bins', how='left')
+        df5['se']=(df5['average']-df5['badflag'])*(df5['average']-df5['badflag'])
+        rmse = np.sqrt(df5['se'].sum()/df5['se'].count())
+        track = 1
+    else:
+        df2=data[[var_name,'badflag']]
+        df2[var_name]=df2[var_name].fillna('Missing')
+        df3=df2.groupby(var_name)['badflag'].agg(['count', 'sum'])
+        df3['average'] = df3.apply(lambda x: 0 if x['count']==0 else x['sum']/x['count'], axis=1)
+        df4=df3.reset_index()
+        df4['variable']=var_name
+        df4.columns=['bins','count','sum','average','variable']
+        df5 = pd.merge(df2, df4[['bins','average']], left_on = var_name, right_on='bins', how='left')
+        df5['se']=(df5['average']-df5['badflag'])*(df5['average']-df5['badflag'])
+        rmse = np.sqrt(df5['se'].sum()/df5['se'].count())
+        track = 2
+    return rmse, df4, track,  df5[[var_name, 'badflag', 'bins']]
 
 def calc_iv(node_number, node_datasets, X_col, event_flag, mapper):
     print(f"calc_iv called with node_number: {node_number}")
@@ -191,6 +245,82 @@ def calc_iv(node_number, node_datasets, X_col, event_flag, mapper):
         var_type = 'categorical'
     return top_iv, iv_calc, df_bins, track, var_type
 
+def calc_iv_regression(node_number, node_datasets, X_col, event_flag, mapper):
+
+    df_iv=pd.DataFrame([0,0]).transpose()
+    df_iv.columns=['variable','rmse']
+    X = node_datasets[node_datasets.node_number==node_number][X_col]
+    y = node_datasets[node_datasets.node_number==node_number][event_flag]
+    
+    if X.empty:
+        print("ERROR: X is empty - no features to process!")
+        raise ValueError("No features available for node processing")
+    
+    if len(X.columns) == 0:
+        print("ERROR: X has no columns - no features to process!")
+        raise ValueError("No feature columns available for node processing")
+    
+    for i in X.columns:
+        if extract_dtype(i, mapper) == 'numerical':
+            rmse, df_bins, track, raw_data = add_bins_regression(X, y, str(i))
+            df_new=pd.DataFrame([i,rmse]).transpose()
+            df_new.columns=['variable','rmse']
+            df_iv=pd.concat([df_new, df_iv], axis=0)
+        elif extract_dtype(i, mapper) == 'categorical':
+            df_mod, mapping = var_key_cat(X, y, str(i))
+            rmse, df_bins, track, raw_data = add_bins_regression(df_mod, df_mod.badflag, 'var_key')
+            df_new=pd.DataFrame([i,rmse]).transpose()
+            df_new.columns=['variable','rmse']
+            df_iv=pd.concat([df_new, df_iv], axis=0)
+    df_iv=df_iv.sort_values(['rmse'], ascending=[True]) ## need lowest RMSE for regression
+    df_iv=df_iv.reset_index(drop=True)
+    # Remove the dummy row (0,0) that was added at the beginning
+    df_iv = df_iv[df_iv['variable'] != 0].reset_index(drop=True)
+    
+    if df_iv.empty or len(df_iv) == 0:
+        print("ERROR: df_iv is empty - no variables were processed!")
+        raise ValueError("No variables available for IV calculation")
+    
+    top_iv = df_iv.iloc[0].variable
+    if extract_dtype(top_iv, mapper) == 'numerical':
+        rmse, df_bins, track, raw_data = add_bins_regression(X, y, top_iv)
+        df_bins["list_values"] = df_bins["bins"]
+        if track == 1:
+            df_bins[['lower_bound','upper_bound']] = df_bins['bins'].astype(str).str.split(',',expand=True)
+            df_bins[['lower_bound','upper_bound']] = df_bins[['lower_bound','upper_bound']].fillna("")
+            df_bins['lb_clean']=pd.to_numeric(df_bins['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+            df_bins['ub_clean']=pd.to_numeric(df_bins['upper_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+        else:
+            df_bins['lower_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")-1
+            df_bins['upper_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")
+            df_bins['lb_clean'] = df_bins['lower_bound']
+            df_bins['ub_clean'] = df_bins['upper_bound']
+        df_bins=df_bins.sort_values(['lb_clean'], ascending=[True])
+        df_bins=df_bins.reset_index(drop=True)
+        var_type = 'numerical'
+    elif extract_dtype(top_iv, mapper) == 'categorical':
+        df_mod, mapping = var_key_cat(X, y, top_iv)
+        mapping["var_key"] = pd.to_numeric(mapping["var_key"])
+        rmse, df_bins, track, raw_data = add_bins_regression(df_mod, df_mod.badflag, 'var_key')
+        df_bins['variable'] = top_iv
+        if track == 1:
+            df_bins[['lower_bound','upper_bound']] = df_bins['bins'].astype(str).str.split(',',expand=True)
+            df_bins[['lower_bound','upper_bound']] = df_bins[['lower_bound','upper_bound']].fillna("")
+            df_bins['lb_clean']=pd.to_numeric(df_bins['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+            df_bins['ub_clean']=pd.to_numeric(df_bins['upper_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+        else:
+            df_bins['lower_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")-1
+            df_bins['upper_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")
+            df_bins['lb_clean'] = df_bins['lower_bound']
+            df_bins['ub_clean'] = df_bins['upper_bound']
+        df_bins=df_bins.sort_values(['lb_clean'], ascending=[True])
+        df_bins=df_bins.reset_index(drop=True)
+        def get_values(row):
+            return mapping[(mapping["var_key"] > row["lb_clean"]) &(mapping["var_key"] <= row["ub_clean"])][top_iv].to_list()
+        df_bins["list_values"] = df_bins.apply(get_values, axis=1)
+        var_type = 'categorical'
+    return top_iv, rmse, df_bins, track, var_type, raw_data
+
 def iterate(df):
     i=2
     df['scenario']=0
@@ -261,7 +391,34 @@ def calc_entropy(df):
     df_best = df[df['scenario'] == best_scenario]
     return df_best
 
+def calc_rmse(df, raw_data):
+    df_rollup_1 = df.groupby(['scenario', 'group']).agg({'sum':"sum"})
+    df_rollup_1.columns = ['events']
+    df_rollup_2 = df.groupby(['scenario', 'group']).agg({'count':"sum"})
+    df_rollup_2.columns = ['all_count']
+    df_rollup_3 = df_rollup_1.join(df_rollup_2)
+    df_rollup_3 = df_rollup_3.reset_index()
+    df_rollup_3['average'] = df_rollup_3['events'] / df_rollup_3['all_count']
+    scen_rmse = pd.DataFrame(columns=['scenario','rmse'])
+    for i in df_rollup_3.scenario.unique():
+        scen_table = df_rollup_3[df_rollup_3.scenario == i]
+        bin_table = df[df.scenario == i]
+        raw_data_2 = pd.merge(raw_data, bin_table[['bins','group']], on='bins', how='left')
+        raw_data_3 = pd.merge(raw_data_2, scen_table[['group','average']], on='group', how='left')
+        raw_data_3['se']=(raw_data_3['average']-raw_data_3['badflag'])*(raw_data_3['average']-raw_data_3['badflag'])
+        rmse = np.sqrt(raw_data_3['se'].sum()/raw_data_3['se'].count())
+        row_add = pd.DataFrame([i, rmse]).transpose()
+        row_add.columns = ['scenario','rmse']
+        scen_rmse = pd.concat([scen_rmse, row_add], axis=0)
+    scen_rmse=scen_rmse.sort_values(['rmse'], ascending=[True])
+    scen_rmse=scen_rmse.reset_index(drop=True)
+    best_scenario = scen_rmse.iloc[0].scenario
+    df_best = df[df['scenario'] == best_scenario]
+    return df_best
+
 def rollup_best(df, track, var_type):
+    df_missing = df[df.bins=='Missing'].reset_index(drop = True)
+    df = df[df.bins!='Missing']
     if track == 1:
         df[['lower_bound','upper_bound']] = df['bins'].astype(str).str.split(',',expand=True)
         df['lb_clean']=pd.to_numeric(df['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
@@ -283,74 +440,67 @@ def rollup_best(df, track, var_type):
     df_clean['bad_rate']=df_clean['sum']/df_clean['count']
     df_clean_2=df_clean[['variable','lb_clean','ub_clean','sum','count','bad_rate', 'list_values']]
     df_clean_2.columns = ['variable','lower_bound','upper_bound', 'events', 'all_records', 'event_rate', 'list_values']
-    return df_clean_2
-
-def add_missing(df, df_missing):
-    missing_events = df_missing.loc[0, "sum"]
-    missing_all_records = df_missing.loc[0, "count"]
-    df_compiled = df.copy()
-    df_compiled['missing'] = 0
-    df_compiled['scenario'] = -999
-    for i in df.index:
-        df_test = df.copy()
-        df_test['missing']=0
-        df_test['scenario']=i
-        df_test.loc[i, "events"] = df_test.loc[i, "events"]+missing_events
-        df_test.loc[i, "all_records"] = df_test.loc[i, "all_records"]+missing_all_records
-        df_test.loc[i, "missing"] = 1
-        df_compiled = pd.concat([df_compiled, df_test])
-    # Missing as a separate scenario
-    df_missing_for_append = df_missing[['variable', 'sum', 'count']]
-    df_missing_for_append['lower_bound'] = np.nan
-    df_missing_for_append['upper_bound'] = np.nan
-    df_missing_for_append['event_rate'] = df_missing_for_append['sum'] / df_missing_for_append['count']
-    df_missing_for_append['missing'] = 1
-    df_missing_for_append['scenario'] = -999
-    df_missing_for_append['group'] = 0
-    df_missing_for_append = df_missing_for_append.set_index('group')
-    df_compiled.columns = ['variable','lower_bound','upper_bound','sum','count','event_rate','list_values','missing','scenario']
-    df_compiled = pd.concat([df_compiled, df_missing_for_append])
-    df_best = calc_entropy(df_compiled)
-    return df_best.sort_index()
+    df_clean_2['missing']=0
+    if df_missing.empty:
+        return df_clean_2
+    else:
+        group_label = df_missing['group'].iloc[0]
+        if group_label in df_clean_2.index:
+            df_clean_2.loc[group_label, 'missing'] = 1
+            df_clean_2.loc[group_label, 'events'] = df_clean_2.loc[group_label, 'events'] + df_missing.loc[0, 'sum']
+            df_clean_2.loc[group_label, 'all_records'] = df_clean_2.loc[group_label, 'all_records'] +  + df_missing.loc[0, 'count']
+            df_clean_2['event_rate'] = df_clean_2['events'] / df_clean_2['all_records']
+        else:
+            missing_variable = df_missing['variable'].iloc[0]
+            missing_lb = np.nan
+            missing_ub = np.nan
+            missing_events = df_missing['sum'].iloc[0]
+            missing_all_records = df_missing['count'].iloc[0]
+            missing_event_rate = df_missing['average'].iloc[0]
+            missing_list_values = 'Missing'
+            df_missing_for_append = pd.DataFrame([missing_variable, missing_lb, missing_ub, missing_events, missing_all_records, missing_event_rate, missing_list_values, 1]).transpose()
+            df_missing_for_append.columns = ['variable','lower_bound','upper_bound', 'events', 'all_records', 'event_rate', 'list_values', 'missing']
+            df_clean_2 = pd.concat([df_clean_2, df_missing_for_append])
+        df_clean_2 = df_clean_2.reset_index(drop=True)
+        return df_clean_2
 
 def coarse_classing(df, min_leaf_size, max_branches, track, var_type):
-    print(f"coarse_classing called with df shape: {df.shape}")
-    print(f"df columns: {list(df.columns)}")
-    print(f"df contents: {df}")
-    
-    df_original = df.copy()
-    df_missing = df[df['bins']=='Missing']
-    df = df[df['bins']!='Missing'].reset_index(drop=True)
-    print(f"After removing missing, df shape: {df.shape}")
-    
     if df.empty:
         print("ERROR: df is empty after removing missing values!")
         raise ValueError("No valid bins available for coarse classing")
     
     df['group'] = 1
-    print("About to call iterate...")
     df_scenarios = iterate(df)
-    print(f"iterate completed, df_scenarios shape: {df_scenarios.shape}")
-    
-    print("About to call check_conditions...")
     df_valid = check_conditions(df_scenarios, min_leaf_size, max_branches)
-    print(f"check_conditions completed, df_valid shape: {df_valid.shape}")
-    
     if df_valid.shape[0] == 0:
-        df_original['event_rate'] = df_original['sum'] / df_original['count']
-        df_original['missing'] = df_original.apply(lambda x: 1 if x['bins']=='Missing' else 0, axis=1)
-        df_original = df_original.rename(columns={"sum": "events", "count": "all_records"})
-        return df_original[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 1, var_type
+        df['event_rate'] = df['sum'] / df['count']
+        df['missing'] = df.apply(lambda x: 1 if x['bins']=='Missing' else 0, axis=1)
+        df = df.rename(columns={"sum": "events", "count": "all_records"})
+        return df[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 1, var_type
     else:
         df_best = calc_entropy(df_valid)
         df_clean = rollup_best(df_best, track, var_type)
-        if df_missing.shape[0] > 0:
-            df_clean_m=add_missing(df_clean, df_missing.reset_index(drop=True))
-            df_clean_m = df_clean_m.rename(columns={"sum": "events", "count": "all_records"})
-            return df_clean_m.drop(['scenario'],axis=1)[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 0, var_type
-        else:
-            df_clean['missing'] = 0
-            return df_clean[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 0, var_type
+        return df_clean[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 0, var_type
+
+def coarse_classing_regression(df, min_leaf_size, max_branches, track, var_type, raw_data):
+    if df.empty:
+        print("ERROR: df is empty after removing missing values!")
+        raise ValueError("No valid bins available for coarse classing")
+        
+    df['group'] = 1
+    df_scenarios = iterate(df)
+    
+    df_valid = check_conditions(df_scenarios, min_leaf_size, max_branches)
+    
+    if df_valid.shape[0] == 0:
+        df['event_rate'] = df['sum'] / df['count']
+        df['missing'] = df.apply(lambda x: 1 if x['bins']=='Missing' else 0, axis=1)
+        df = df.rename(columns={"sum": "events", "count": "all_records"})
+        return df[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 1, var_type
+    else:
+        df_best = calc_rmse(df_valid, raw_data)
+        df_clean = rollup_best(df_best, track, var_type)
+        return df_clean[['variable','lower_bound','upper_bound','events','all_records','event_rate','missing','list_values']], 0, var_type
 
 def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, node_datasets, event_flag, mapper):
     node_master_fn = node_master.copy()
@@ -373,7 +523,7 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
             var_type = extract_dtype(variable, mapper)
             if i == 0:
                 if var_type == 'numerical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -386,7 +536,7 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
                         node_rule = "".join([variable, " <= ", str(upper)])
                         node_branch = "".join([" <= ", str(upper)])
                 elif var_type == 'categorical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -400,9 +550,9 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
                         node_branch = "".join([" in ", str(list_values)])
                 lower_bound = lower
                 upper_bound = upper
-            elif i == df.shape[0]:
+            elif i == df.shape[0] - 1:
                 if var_type == 'numerical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -415,7 +565,7 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
                         node_rule = "".join([variable, " > ", str(lower)])
                         node_branch = "".join([" > ", str(lower)])
                 elif var_type == 'categorical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -431,7 +581,7 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
                 upper_bound = upper
             else:
                 if var_type == 'numerical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -444,7 +594,7 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
                         node_rule = "".join([variable, " > ", str(lower), " and ", variable, " <= ", str(upper)])
                         node_branch = "".join(["(", str(lower), ", ", str(upper), "]"])
                 elif var_type == 'categorical':
-                    if pd.isna(lower) or pd.isna(upper):
+                    if is_na_like(lower) or is_na_like(upper):
                         df_split = node_sp[node_sp[variable].isna()]
                         node_rule = "".join([variable, " == np.nan"])
                         node_branch = "".join([" == np.nan"])
@@ -480,22 +630,17 @@ def add_nodes(df, parent_node, max_depth, min_node_split, error, node_master, no
             node_datasets_fn = pd.concat([node_datasets_fn, df_split])
         return node_master_fn, node_datasets_fn
 
-def split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper):
-    print(f"split_node called for node {node_number}")
-    
-    print("About to call calc_iv...")
-    top_iv, iv_calc, df_iv, track, var_type = calc_iv(node_number, node_datasets, X_col, event_flag, mapper)
-    print(f"calc_iv completed. top_iv: {top_iv}, var_type: {var_type}")
-    
-    print("About to call coarse_classing...")
-    df_out, error, var_type = coarse_classing(df_iv, min_leaf_size, max_branches, track, var_type)
-    print(f"coarse_classing completed. error: {error}")
-    
-    print("About to call add_nodes...")
-    node_master_fn, node_datasets_fn = add_nodes(df_out, node_number, max_depth, min_node_split, error, node_master, node_datasets, event_flag, mapper)
-    print("add_nodes completed")
-    
-    return node_master_fn, node_datasets_fn
+def split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper, regression_flag):
+    if regression_flag == 0:
+        top_iv, iv_calc, df_iv, track, var_type = calc_iv(node_number, node_datasets, X_col, event_flag, mapper)
+        df_out, error, var_type = coarse_classing(df_iv, min_leaf_size, max_branches, track, var_type)
+        node_master_fn, node_datasets_fn = add_nodes(df_out, node_number, max_depth, min_node_split, error, node_master, node_datasets, event_flag, mapper)
+        return node_master_fn, node_datasets_fn
+    else:
+        top_iv, iv_calc, df_iv, track, var_type, raw_data = calc_iv_regression(node_number, node_datasets, X_col, event_flag, mapper)
+        df_out, error, var_type = coarse_classing_regression(df_iv, min_leaf_size, max_branches, track, var_type, raw_data)
+        node_master_fn, node_datasets_fn = add_nodes(df_out, node_number, max_depth, min_node_split, error, node_master, node_datasets, event_flag, mapper)
+        return node_master_fn, node_datasets_fn
 
 def next_node_to_split(node_master, max_depth):
     node_to_split = 0
@@ -506,11 +651,11 @@ def next_node_to_split(node_master, max_depth):
             break
     return node_to_split    
 
-def build_tree(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, mapper):
+def build_tree(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, mapper, regression_flag):
     X_col, node_master, node_datasets = init_setup(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches)
     while next_node_to_split(node_master, max_depth) != 0:
         node_number = next_node_to_split(node_master, max_depth)
-        node_master, node_datasets = split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper)
+        node_master, node_datasets = split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper, regression_flag)
     return node_master, node_datasets
 	
 def del_subtree(df, df_node, node_number):
@@ -547,25 +692,12 @@ def next_node_to_split_node(df, max_depth, node_number): ## df is node_master
             break
     return node_to_split  
 
-def build_tree_node(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, node_to_split, X_col, node_master, node_datasets, mapper):
-    print(f"build_tree_node called with node_to_split: {node_to_split}")
-    print(f"node_master shape: {node_master.shape}")
-    print(f"node_datasets shape: {node_datasets.shape}")
-    print(f"max_depth: {max_depth}, min_node_split: {min_node_split}, min_leaf_size: {min_leaf_size}")
-    
+def build_tree_node(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, node_to_split, X_col, node_master, node_datasets, mapper, regression_flag):
     iteration_count = 0
     while next_node_to_split_node(node_master, max_depth, node_to_split) != 0:
         iteration_count += 1
-        print(f"Iteration {iteration_count}: Finding next node to split...")
-        
         node_number = next_node_to_split_node(node_master, max_depth, node_to_split)
-        print(f"Next node to split: {node_number}")
-        
-        print(f"About to call split_node for node {node_number}...")
-        node_master, node_datasets = split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper)
-        print(f"split_node completed for node {node_number}")
-        print(f"node_master shape after split: {node_master.shape}")
-        
+        node_master, node_datasets = split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper, regression_flag)
         if iteration_count > 10:  # Safety break to prevent infinite loops
             print("WARNING: Too many iterations, breaking loop")
             break
@@ -595,6 +727,27 @@ def find_var(node_number, node_datasets, X_col, event_flag, mapper):
     df_iv=df_iv.reset_index(drop=True)
     return df_iv[['variable','iv']]
 
+def find_var_regression(node_number, node_datasets, X_col, event_flag, mapper):
+    df_iv=pd.DataFrame([0,0]).transpose()
+    df_iv.columns=['variable','rmse']
+    X = node_datasets[node_datasets.node_number==node_number][X_col]
+    y = node_datasets[node_datasets.node_number==node_number][event_flag]
+    for i in X.columns:
+        if extract_dtype(i, mapper) == 'numerical':
+            rmse, df_bins, track, raw_data = add_bins_regression(X, y, str(i))
+            df_new=pd.DataFrame([i,rmse]).transpose()
+            df_new.columns=['variable','rmse']
+            df_iv=pd.concat([df_new, df_iv], axis=0)
+        elif extract_dtype(i, mapper) == 'categorical':
+            df_mod, mapping = var_key_cat(X, y, str(i))
+            rmse, df_bins, track, raw_data = add_bins_regression(df_mod, df_mod.badflag, 'var_key')
+            df_new=pd.DataFrame([i,rmse]).transpose()
+            df_new.columns=['variable','rmse']
+            df_iv=pd.concat([df_new, df_iv], axis=0)    
+    df_iv=df_iv.sort_values(['rmse'], ascending=[True])
+    df_iv=df_iv.reset_index(drop=True)
+    return df_iv[df_iv['rmse']!=0][['variable','rmse']]
+
 def best_split(node_number, node_datasets, X_col, event_flag, variable_name, min_leaf_size, max_branches, mapper):
     X = node_datasets[node_datasets.node_number==node_number][X_col]
     y = node_datasets[node_datasets.node_number==node_number][event_flag]
@@ -622,6 +775,72 @@ def best_split(node_number, node_datasets, X_col, event_flag, variable_name, min
         if track == 1:
             df_bins[['lower_bound','upper_bound']] = df_bins['bins'].astype(str).str.split(',',expand=True)
             df_bins[['lower_bound','upper_bound']] = df_bins[['lower_bound','upper_bound']].fillna("")
+            df_bins['lb_clean']=pd.to_numeric(df_bins['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)), errors='coerce')
+            df_bins['ub_clean']=pd.to_numeric(df_bins['upper_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)), errors='coerce')
+        else:
+            df_bins['lower_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")-1
+            df_bins['upper_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")
+            df_bins['lb_clean'] = pd.to_numeric(df_bins['lower_bound'], errors='coerce')
+            df_bins['ub_clean'] = pd.to_numeric(df_bins['upper_bound'], errors='coerce')
+
+        # Guard Missing rows: ensure their clean bounds are NaN so we won't range-match
+        try:
+            missing_mask = df_bins['bins'].astype(str) == 'Missing'
+            df_bins.loc[missing_mask, ['lb_clean','ub_clean']] = np.nan
+        except Exception:
+            pass
+
+        def get_values(row):
+            lb = row['lb_clean']
+            ub = row['ub_clean']
+            # If bounds are NaN (e.g., Missing), return empty; handled downstream
+            if pd.isna(lb) or pd.isna(ub):
+                return []
+            mask = (mapping["var_key"] > float(lb)) & (mapping["var_key"] <= float(ub))
+            vals = mapping.loc[mask, variable_name].tolist()
+            # Flatten any array-like to scalars
+            flat = []
+            for v in vals:
+                if isinstance(v, (np.ndarray, pd.Series, list, tuple)):
+                    flat.extend(np.array(v).ravel().tolist())
+                else:
+                    flat.append(v)
+            return flat
+
+        df_bins["list_values"] = df_bins.apply(get_values, axis=1)
+        df_bins=df_bins.sort_values(['lb_clean'], ascending=[True])
+        df_bins=df_bins.reset_index(drop=True)
+        var_type = 'categorical'
+    df_out, error, var_type = coarse_classing(df_bins, min_leaf_size, max_branches, track, var_type)
+    return df_out
+
+def best_split_regression(node_number, node_datasets, X_col, event_flag, variable_name, min_leaf_size, max_branches, mapper):
+    X = node_datasets[node_datasets.node_number==node_number][X_col]
+    y = node_datasets[node_datasets.node_number==node_number][event_flag]
+    if extract_dtype(variable_name, mapper) == 'numerical':
+        rmse, df_bins, track, raw_data = add_bins_regression(X, y, variable_name)
+        df_bins["list_values"] = df_bins["bins"]
+        if track == 1:
+            df_bins[['lower_bound','upper_bound']] = df_bins['bins'].astype(str).str.split(',',expand=True)
+            df_bins[['lower_bound','upper_bound']] = df_bins[['lower_bound','upper_bound']].fillna("")
+            df_bins['lb_clean']=pd.to_numeric(df_bins['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+            df_bins['ub_clean']=pd.to_numeric(df_bins['upper_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
+        else:
+            df_bins['lower_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")-1
+            df_bins['upper_bound'] = pd.to_numeric(df_bins['bins'], errors="coerce")
+            df_bins['lb_clean'] = df_bins['lower_bound']
+            df_bins['ub_clean'] = df_bins['upper_bound']
+        df_bins=df_bins.sort_values(['lb_clean'], ascending=[True])
+        df_bins=df_bins.reset_index()
+        var_type = 'numerical'
+    elif extract_dtype(variable_name, mapper) == 'categorical':
+        df_mod, mapping = var_key_cat(X, y, variable_name)
+        mapping["var_key"] = pd.to_numeric(mapping["var_key"])
+        rmse, df_bins, track, raw_data = add_bins_regression(df_mod, df_mod.badflag, 'var_key')
+        df_bins['variable'] = variable_name
+        if track == 1:
+            df_bins[['lower_bound','upper_bound']] = df_bins['bins'].astype(str).str.split(',',expand=True)
+            df_bins[['lower_bound','upper_bound']] = df_bins[['lower_bound','upper_bound']].fillna("")
             df_bins['lb_clean']=pd.to_numeric(df_bins['lower_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
             df_bins['ub_clean']=pd.to_numeric(df_bins['upper_bound'].apply(lambda x: re.sub(r'[^-.0-9\s]','',x)))
         else:
@@ -635,7 +854,7 @@ def best_split(node_number, node_datasets, X_col, event_flag, variable_name, min
             return mapping[(mapping["var_key"] > row["lb_clean"]) &(mapping["var_key"] <= row["ub_clean"])][variable_name].to_list()
         df_bins["list_values"] = df_bins.apply(get_values, axis=1)
         var_type = 'categorical'
-    df_out, error, var_type = coarse_classing(df_bins, min_leaf_size, max_branches, track, var_type)
+    df_out, error, var_type = coarse_classing_regression(df_bins, min_leaf_size, max_branches, track, var_type, raw_data)
     return df_out
 
 def eval_split(node_number, node_datasets, event_flag, df, mapper):
@@ -651,29 +870,29 @@ def eval_split(node_number, node_datasets, event_flag, df, mapper):
         var_type = extract_dtype(variable, mapper)
         if i == 0:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable] <= upper) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable] <= upper]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable].isin(list_values)]
-        elif i == df.shape[0]:
+        elif i == df.shape[0] - 1:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable] > lower) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable] > lower]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]
@@ -681,14 +900,14 @@ def eval_split(node_number, node_datasets, event_flag, df, mapper):
                     df_split = node_sp[node_sp[variable].isin(list_values)]
         else:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[((node_sp[variable] > lower) & (node_sp[variable] <= upper)) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[(node_sp[variable] > lower) & (node_sp[variable] <= upper)]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]
@@ -814,29 +1033,29 @@ def add_node_init(df, parent_node, df_for_tree, node_datasets_new, mapper):
             raise ValueError(f"Variable '{variable}' not found in node_sp columns")
         if i == 0:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable] <= upper) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable] <= upper]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable].isin(list_values)]
-        elif i == df.shape[0]:
+        elif i == df.shape[0] - 1:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable] > lower) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[node_sp[variable] > lower]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]
@@ -844,14 +1063,14 @@ def add_node_init(df, parent_node, df_for_tree, node_datasets_new, mapper):
                     df_split = node_sp[node_sp[variable].isin(list_values)]
         else:
             if var_type == 'numerical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[((node_sp[variable] > lower) & (node_sp[variable] <= upper)) | (node_sp[variable].isna())]
                 else:
                     df_split = node_sp[(node_sp[variable] > lower) & (node_sp[variable] <= upper)]
             elif var_type == 'categorical':
-                if pd.isna(lower) or pd.isna(upper):
+                if is_na_like(lower) or is_na_like(upper):
                     df_split = node_sp[node_sp[variable].isna()]
                 elif missing == 1:
                     df_split = node_sp[(node_sp[variable].isin(list_values)) | (node_sp[variable].isna())]

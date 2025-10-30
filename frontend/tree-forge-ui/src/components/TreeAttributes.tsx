@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,9 +10,16 @@ import { TreeAttributes } from "@/types";
 interface TreeAttributesProps {
   attributes: TreeAttributes;
   onAttributeChange: (key: string, value: string) => void;
+  regressionFlag?: number; // 0 = classification, 1 = regression
 }
 
-const TreeAttributes = ({ attributes, onAttributeChange }: TreeAttributesProps) => {
+const TreeAttributes = ({ attributes, onAttributeChange, regressionFlag = 0 }: TreeAttributesProps) => {
+  // Ensure criteria is RMSE in regression mode
+  useEffect(() => {
+    if (regressionFlag === 1 && attributes.criteria.toLowerCase() !== 'rmse') {
+      onAttributeChange('criteria', 'rmse');
+    }
+  }, [regressionFlag]);
   return (
     <TooltipProvider>
       <Card className="shadow-card border-0">
@@ -119,15 +127,26 @@ const TreeAttributes = ({ attributes, onAttributeChange }: TreeAttributesProps) 
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <Select value={attributes.criteria} onValueChange={(value) => onAttributeChange('criteria', value)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="entropy">Entropy</SelectItem>
-                  <SelectItem value="gini">Gini</SelectItem>
-                </SelectContent>
-              </Select>
+              {regressionFlag === 1 ? (
+                <Select value={attributes.criteria} onValueChange={(value) => onAttributeChange('criteria', value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rmse">RMSE</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Select value={attributes.criteria} onValueChange={(value) => onAttributeChange('criteria', value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="entropy">Entropy</SelectItem>
+                    <SelectItem value="gini">Gini</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             
             <div className="space-y-2">

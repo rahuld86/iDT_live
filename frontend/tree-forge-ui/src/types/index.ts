@@ -54,7 +54,8 @@ export interface CategoricalValue {
 
 export interface Variable {
   name: string;
-  informationValue: number;
+  informationValue?: number; // For classification problems
+  rmse?: number; // For regression problems
   type: 'numerical' | 'categorical';
 }
 
@@ -69,3 +70,5 @@ export type CriteriaType = "entropy" | "gini";
 export type UniqueVarType = "0" | "1";
 
 export type MonotonousSplitsType = "0" | "1";
+
+export type RegressionFlagType = 0 | 1; // 0 = Binary Classification, 1 = Regression

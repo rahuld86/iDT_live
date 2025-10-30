@@ -52,11 +52,16 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
   const [newBinCutoff, setNewBinCutoff] = useState<string>('');
   const [selectedMissingBin, setSelectedMissingBin] = useState<number>(0);
   const { toast } = useToast();
+  const [regressionFlag, setRegressionFlag] = useState<number>(0);
 
   // Fetch best splits when dialog opens
   useEffect(() => {
     if (isOpen && nodeNumber && variableName) {
       fetchBestSplits();
+      // Load regression flag to tailor labels/formatting
+      apiService.getRegressionFlag()
+        .then((res) => setRegressionFlag(res?.regression_flag ?? 0))
+        .catch(() => setRegressionFlag(0));
     }
   }, [isOpen, nodeNumber, variableName]);
 
@@ -93,16 +98,20 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
   const evaluateSplits = useCallback(async (splits: EditableSplitData[]) => {
     try {
       setIsEvaluating(true);
-      const splitsForAPI = splits.map((split, index) => ({
-        lower_bound: split.editable_lower_bound,
-        upper_bound: split.editable_upper_bound,
-        missing: selectedMissingBin === index ? 1 : 0
+      // Drop degenerate bins where lower_bound >= upper_bound
+      const sanitized = splits.filter(s => Number(s.editable_upper_bound) > Number(s.editable_lower_bound));
+      const splitsForAPI = sanitized.map((split, index) => ({
+        lower_bound: Number(split.editable_lower_bound),
+        upper_bound: Number(split.editable_upper_bound),
+        // send textual interval as requested; backend tolerates and normalizes
+        list_values: `(${split.editable_lower_bound}, ${split.editable_upper_bound}]`,
+        missing: selectedMissingBin === index ? 1 : 0,
       }));
       
       const response = await apiService.evalSplit(nodeNumber, variableName, splitsForAPI);
       
       // Update the splits with new evaluation data
-      const updatedSplits = splits.map((split, index) => ({
+      const updatedSplits = sanitized.map((split, index) => ({
         ...split,
         ...response.eval_split[index],
         editable_lower_bound: split.editable_lower_bound,
@@ -270,7 +279,7 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
       
       setNewBinCutoff('');
       
-      // Evaluate splits after adding the new bin
+      // Evaluate splits after adding the new bin (send all bins)
       evaluateSplits(newSplits);
       
       return newSplits;
@@ -290,7 +299,8 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
       const finalMissingSelection = selectedMissingBin >= 0 ? selectedMissingBin : 0;
       
       // Prepare the splits data for the API call
-      const splitsForAPI = bestSplits.map((split, index) => ({
+      const validForSubmit = bestSplits.filter(s => Number(s.editable_upper_bound) > Number(s.editable_lower_bound));
+      const splitsForAPI = validForSubmit.map((split, index) => ({
         lower_bound: split.editable_lower_bound,
         upper_bound: split.editable_upper_bound,
         list_values: `(${split.editable_lower_bound}, ${split.editable_upper_bound}]`,
@@ -394,7 +404,7 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
                   <div className="col-span-3">Lower Bound</div>
                   <div className="col-span-3">Upper Bound</div>
                   <div className="col-span-2 text-right">Records</div>
-                  <div className="col-span-2 text-right">Event Rate</div>
+                  <div className="col-span-2 text-right">{regressionFlag === 1 ? 'Average' : 'Event Rate'}</div>
                   <div className="col-span-1 text-center">Missing</div>
                 </div>
               </div>
@@ -445,16 +455,18 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
                       )}
                     </div>
                     
-                    {/* Event Rate */}
+                    {/* Event Rate / Average */}
                     <div className="col-span-2 flex items-center justify-end">
                       {isEvaluating ? (
                         <div className="animate-pulse bg-muted h-5 w-10 rounded"></div>
                       ) : (
                         <Badge 
-                          variant={split.event_rate > 0.5 ? "default" : "outline"}
+                          variant={regressionFlag === 1 ? "outline" : split.event_rate > 0.5 ? "default" : "outline"}
                           className="text-xs h-5 px-2"
                         >
-                          {formatEventRate(split.event_rate)}
+                          {regressionFlag === 1
+                            ? Number(split.event_rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : formatEventRate(split.event_rate)}
                         </Badge>
                       )}
                     </div>

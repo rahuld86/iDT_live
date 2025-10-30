@@ -44,11 +44,16 @@ const EditCategoricalBinsDialog: React.FC<EditCategoricalBinsDialogProps> = ({
   const [draggedValue, setDraggedValue] = useState<{ value: string; sourceBinIndex: number } | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const { toast } = useToast();
+  const [regressionFlag, setRegressionFlag] = useState<number>(0);
 
   // Initialize edited bins when dialog opens
   useEffect(() => {
     if (isOpen) {
       setEditedBins([...bins]);
+      // Load regression flag to control labels/formatting
+      apiService.getRegressionFlag()
+        .then((res) => setRegressionFlag(res?.regression_flag ?? 0))
+        .catch(() => setRegressionFlag(0));
     }
   }, [isOpen, bins]);
 
@@ -344,23 +349,25 @@ const EditCategoricalBinsDialog: React.FC<EditCategoricalBinsDialogProps> = ({
                     {bin.values.length > 0 && (
                       <div className="mt-3 pt-3 border-t space-y-1">
                         <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">Events:</span>
+                          <span className="text-muted-foreground">Count:</span>
                           {isEvaluating ? (
                             <div className="animate-pulse bg-muted h-4 w-8 rounded"></div>
                           ) : (
-                            <span className="font-mono">{bin.events.toLocaleString()}</span>
+                            <span className="font-mono">{bin.all_records.toLocaleString()}</span>
                           )}
                         </div>
                         <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">Event Rate:</span>
+                          <span className="text-muted-foreground">{regressionFlag === 1 ? 'Average:' : 'Event Rate:'}</span>
                           {isEvaluating ? (
                             <div className="animate-pulse bg-muted h-4 w-10 rounded"></div>
                           ) : (
                             <Badge 
-                              variant={bin.event_rate > 0.5 ? "default" : "outline"}
+                              variant={regressionFlag === 1 ? "outline" : bin.event_rate > 0.5 ? "default" : "outline"}
                               className="text-xs h-4 px-1"
                             >
-                              {formatEventRate(bin.event_rate)}
+                              {regressionFlag === 1
+                                ? Number(bin.event_rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                : formatEventRate(bin.event_rate)}
                             </Badge>
                           )}
                         </div>

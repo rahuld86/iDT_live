@@ -115,10 +115,10 @@ class ApiService {
     }
   }
 
-  async setTarget(target: string): Promise<{ message: string }> {
+  async setTarget(target: string, regressionFlag: number = 0): Promise<{ message: string }> {
     return this.makeRequest<{ message: string }>('/setTarget', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, regression_flag: regressionFlag }),
     });
   }
 
@@ -228,7 +228,7 @@ class ApiService {
     });
   }
 
-  async evalSplit(nodeNumber: number, variable: string, splits: Array<{ lower_bound: number; upper_bound: number; list_values?: string[]; missing?: number }>): Promise<{ eval_split: Array<{ 
+  async evalSplit(nodeNumber: number, variable: string, splits: Array<{ lower_bound: number; upper_bound: number; list_values?: string | string[]; missing?: number }>): Promise<{ eval_split: Array<{ 
     all_records: number; 
     event_rate: number; 
     events: number; 
@@ -257,7 +257,7 @@ class ApiService {
     });
   }
 
-  async addNode(nodeNumber: number, variable: string, splits: Array<{ lower_bound: number; upper_bound: number }>): Promise<{ success: boolean; message: string }> {
+  async addNode(nodeNumber: number, variable: string, splits: Array<{ lower_bound: number; upper_bound: number; list_values?: string | string[]; missing?: number }>): Promise<{ success: boolean; message: string }> {
     return this.makeRequest<{ success: boolean; message: string }>('/addNode', {
       method: 'POST',
       body: JSON.stringify({ 
@@ -386,6 +386,12 @@ class ApiService {
     return this.makeRequest<{ node_master: any }>('/labelNode', {
       method: 'POST',
       body: JSON.stringify({ node_number: nodeNumber, label: label }),
+    });
+  }
+
+  async getRegressionFlag(): Promise<{ regression_flag: number }> {
+    return this.makeRequest<{ regression_flag: number }>('/getRegressionFlag', {
+      method: 'GET',
     });
   }
 }

@@ -23,6 +23,7 @@ interface DecisionTreeRendererProps {
   onToggleNodeExpansion: (nodeNumber: number) => void;
   colorConfig?: ColorConfig;
   onTreeRefresh?: () => void;
+  regressionFlag?: number; // 0 = Binary Classification, 1 = Regression
 }
 
 const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({ 
@@ -31,7 +32,8 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
   expandedNodes, 
   onToggleNodeExpansion,
   colorConfig = { mode: 'solid', color1: '#ffffff', color2: '#ffffff' },
-  onTreeRefresh
+  onTreeRefresh,
+  regressionFlag = 0
 }) => {
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -335,8 +337,42 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     }
   };
 
-  // Helper function to calculate node color based on configuration and event rate
-  const getNodeColor = (eventRate: number) => {
+  // Compute normalization range for regression 'average' values
+  const regressionRange = useMemo(() => {
+    if (regressionFlag !== 1 || !nodeMaster || nodeMaster.length === 0) {
+      return { min: 0, max: 1 };
+    }
+    let min = Infinity;
+    let max = -Infinity;
+    for (const n of nodeMaster) {
+      const v = typeof n.event_rate === 'number' ? n.event_rate : Number(n.event_rate);
+      if (!isNaN(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    if (!isFinite(min) || !isFinite(max) || min === max) {
+      // Fallback to a sensible range to avoid NaN colors
+      return { min: 0, max: min === max ? (min || 1) : 1 };
+    }
+    return { min, max };
+  }, [nodeMaster, regressionFlag]);
+
+  const normalizeValue = (raw: number) => {
+    if (regressionFlag !== 1) return raw; // already 0..1 for classification
+    const v = Number(raw);
+    if (!isFinite(v)) return 0.5;
+    const { min, max } = regressionRange;
+    const span = max - min;
+    if (!isFinite(span) || span === 0) return 0.5;
+    const norm = (v - min) / span;
+    // Clamp to [0,1]
+    return Math.max(0, Math.min(1, norm));
+  };
+
+  // Helper function to calculate node color based on configuration and metric
+  const getNodeColor = (rawValue: number) => {
+    const value = normalizeValue(rawValue);
     // Helper function to convert hex to rgba
     const hexToRgb = (hex: string) => {
       const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -356,12 +392,12 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         return {
           primary: colorConfig.color1,
           secondary: '#ffffff', // Always use white as secondary color
-          splitPercentage: eventRate * 100
+          splitPercentage: value * 100
         };
       
       case 'gradient':
         const gradientRgb = hexToRgb(colorConfig.color1);
-        const transparency = 0.1 + (eventRate * 0.8); // Varies from 0.1 to 0.9 based on event rate for greater contrast
+        const transparency = 0.1 + (value * 0.8); // Varies from 0.1 to 0.9 based on normalized value
         return `rgba(${gradientRgb.r}, ${gradientRgb.g}, ${gradientRgb.b}, ${transparency})`;
       
       default:
@@ -629,6 +665,12 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     const count = nodeData.count || 0;
     const events = nodeData.events || 0;
     const nonEvents = nodeData.non_events || 0;
+    
+    // Format the value based on regression flag
+    const displayValue = regressionFlag === 1 
+      ? eventRate.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : eventRatePercent + '%';
+    const displayLabel = regressionFlag === 1 ? 'Average:' : 'Event Rate:';
 
     const x = node.x + svgDimensions.offsetX;
     const y = node.y + svgDimensions.offsetY;
@@ -702,92 +744,27 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         </text>
 
 
-            {/* Variable: list_values */}
+            {/* Variable: list_values with truncation and hover tooltip */}
             {nodeData.variable && nodeData.list_values && nodeData.node_number !== 1 && (() => {
-              // Convert list_values to string for consistent handling
-              let listValuesStr = Array.isArray(nodeData.list_values) 
-                ? nodeData.list_values.join('') 
+              // Build full text once
+              const rawList = Array.isArray(nodeData.list_values)
+                ? nodeData.list_values.join(', ')
                 : String(nodeData.list_values);
-              
-              // Add "Missing" to the display text if missing = 1 for categorical variables
-              if (nodeData.missing === 1) {
-                listValuesStr = 'Missing' + (listValuesStr ? ', ' + listValuesStr : '');
-              }
-              
-              // Check if the combined string (including Missing) is longer than 30 characters
-              const isLong = listValuesStr.length > 30;
-              const displayText = isLong ? listValuesStr.substring(0, 30) + '...' : listValuesStr;
-              
+              const fullText = `${nodeData.variable}: ${nodeData.missing === 1 ? 'Missing, ' : ''}${rawList}`.trim();
+              // Truncate to fit within 200px node width (approximate char cap)
+              const MAX_CHARS = 28;
+              const displayText = fullText.length > MAX_CHARS ? fullText.slice(0, MAX_CHARS) + '...' : fullText;
+
               return (
-                <g>
-                  <text
-                    x={x + 100}
-                    y={y + 38}
-                    textAnchor="middle"
-                    className="text-xs font-medium fill-slate-700"
-                  >
-                    {nodeData.variable}: {displayText}
-                  </text>
-                  {/* Invisible hover area for tooltip */}
-                  {isLong && (
-                    <rect
-                      x={x + 50}
-                      y={y + 20}
-                      width="100"
-                      height="20"
-                      fill="transparent"
-                      className="cursor-help"
-                      onMouseEnter={(e) => {
-                        const tooltip = document.createElement('div');
-                        tooltip.id = `tooltip-${nodeData.node_number}`;
-                        tooltip.className = 'fixed bg-gray-900 text-white text-xs px-3 py-2 rounded shadow-lg z-50 max-w-xs break-words pointer-events-none';
-                        
-                        // Format tooltip content with variable name at top and list_values on separate lines
-                        let tooltipContent = `${nodeData.variable}:`;
-                        
-                        // Add "Missing" as a separate line if missing = 1
-                        if (nodeData.missing === 1) {
-                          tooltipContent += `\nMissing`;
-                        }
-                        
-                        // Add list_values on separate lines
-                        if (Array.isArray(nodeData.list_values)) {
-                          nodeData.list_values.forEach(value => {
-                            // Skip "Missing" values since we handle it separately above
-                            if (value !== 'Missing') {
-                              tooltipContent += `\n${value}`;
-                            }
-                          });
-                        } else {
-                          // For string format, remove "Missing" if present since we handle it separately above
-                          const cleanListValues = String(nodeData.list_values).replace(/Missing,\s*/g, '');
-                          if (cleanListValues) {
-                            tooltipContent += `\n${cleanListValues}`;
-                          }
-                        }
-                        
-                        tooltip.textContent = tooltipContent;
-                        tooltip.style.left = `${e.clientX + 10}px`;
-                        tooltip.style.top = `${e.clientY - 10}px`;
-                        tooltip.style.whiteSpace = 'pre-line';
-                        document.body.appendChild(tooltip);
-                      }}
-                      onMouseLeave={() => {
-                        const tooltip = document.getElementById(`tooltip-${nodeData.node_number}`);
-                        if (tooltip) {
-                          document.body.removeChild(tooltip);
-                        }
-                      }}
-                      onMouseMove={(e) => {
-                        const tooltip = document.getElementById(`tooltip-${nodeData.node_number}`);
-                        if (tooltip) {
-                          tooltip.style.left = `${e.clientX + 10}px`;
-                          tooltip.style.top = `${e.clientY - 10}px`;
-                        }
-                      }}
-                    />
-                  )}
-                </g>
+                <text
+                  x={x + 100}
+                  y={y + 38}
+                  textAnchor="middle"
+                  className="text-xs font-medium fill-slate-700 cursor-help"
+                >
+                  <title>{fullText}</title>
+                  {displayText}
+                </text>
               );
             })()}
 
@@ -801,14 +778,14 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
           # of records: {count.toLocaleString()}
         </text>
 
-        {/* Event rate */}
+        {/* Event rate / Average */}
         <text
           x={x + 100}
           y={y + 80}
           textAnchor="middle"
           className="text-xs font-medium fill-slate-700"
         >
-          Event rate: {eventRatePercent}%
+          {displayLabel} {displayValue}
         </text>
 
         {/* Node label - at the bottom */}

@@ -24,6 +24,7 @@ const CreateTree = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState<CreateTreeStep>("upload");
   const [selectedTarget, setSelectedTarget] = useState("");
+  const [selectedRegressionFlag, setSelectedRegressionFlag] = useState<number>(0);
   const [dataTypes, setDataTypes] = useState<Record<string, string>>({});
   const [uploadedData, setUploadedData] = useState<DataPreviewData | null>(null);
   const [isLoadingDataTypes, setIsLoadingDataTypes] = useState(false);
@@ -188,6 +189,10 @@ const CreateTree = () => {
     setSelectedTarget(value);
   };
 
+  const handleRegressionFlagChange = (value: number) => {
+    setSelectedRegressionFlag(value);
+  };
+
   const handleDataTypeChange = (column: string, type: string) => {
     setDataTypes(prev => ({ ...prev, [column]: type }));
   };
@@ -228,8 +233,8 @@ const CreateTree = () => {
       // Call /api/setTarget when moving to data types step
       setIsLoading(true);
       try {
-        await apiService.setTarget(selectedTarget);
-        console.log('Target variable set successfully:', selectedTarget);
+        await apiService.setTarget(selectedTarget, selectedRegressionFlag);
+        console.log('Target variable set successfully:', selectedTarget, 'Regression flag:', selectedRegressionFlag);
         
         toast({
           title: "Target Variable Set",
@@ -542,6 +547,9 @@ const CreateTree = () => {
                 columnNames={uploadedData.columnNames}
                 selectedTarget={selectedTarget}
                 onTargetChange={handleTargetChange}
+                selectedRegressionFlag={selectedRegressionFlag}
+                onRegressionFlagChange={handleRegressionFlagChange}
+                sampleData={uploadedData.sampleData}
               />
             ) : (
               <Card className="shadow-card border-0">
@@ -575,6 +583,7 @@ const CreateTree = () => {
             <TreeAttributes
               attributes={treeAttributes}
               onAttributeChange={handleAttributeChange}
+              regressionFlag={selectedRegressionFlag}
             />
           )}
 

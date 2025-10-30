@@ -61,11 +61,16 @@ const CategoricalSplitsDialog: React.FC<CategoricalSplitsDialogProps> = ({
     binIndex: 0
   });
   const { toast } = useToast();
+  const [regressionFlag, setRegressionFlag] = useState<number>(0);
 
   // Fetch best splits when dialog opens
   useEffect(() => {
     if (isOpen && nodeNumber && variableName) {
       fetchCategoricalSplits();
+      // Load regression flag for label/formatting switches
+      apiService.getRegressionFlag()
+        .then((res) => setRegressionFlag(res?.regression_flag ?? 0))
+        .catch(() => setRegressionFlag(0));
     }
   }, [isOpen, nodeNumber, variableName]);
 
@@ -241,8 +246,8 @@ const CategoricalSplitsDialog: React.FC<CategoricalSplitsDialogProps> = ({
                 <div className="grid grid-cols-11 gap-2 px-3 py-2 text-xs font-medium text-muted-foreground bg-muted/50">
                   <div className="col-span-1 text-center">Bin #</div>
                   <div className="col-span-5">Values</div>
-                  <div className="col-span-2 text-right"># of Events</div>
-                  <div className="col-span-2 text-right">Event Rate</div>
+                  <div className="col-span-2 text-right"># of records</div>
+                  <div className="col-span-2 text-right">{regressionFlag === 1 ? 'Average' : 'Event Rate'}</div>
                   <div className="col-span-1 text-center">Actions</div>
                 </div>
               </div>
@@ -278,27 +283,29 @@ const CategoricalSplitsDialog: React.FC<CategoricalSplitsDialogProps> = ({
                       </div>
                     </div>
                     
-                    {/* # of Events */}
+                    {/* # of records */}
                     <div className="col-span-2 flex items-center justify-end">
                       {isEvaluating ? (
                         <div className="animate-pulse bg-muted h-5 w-12 rounded"></div>
                       ) : (
                         <span className="text-xs font-mono">
-                          {bin.events.toLocaleString()}
+                          {bin.all_records.toLocaleString()}
                         </span>
                       )}
                     </div>
                     
-                    {/* Event Rate */}
+                    {/* Event Rate / Average */}
                     <div className="col-span-2 flex items-center justify-end">
                       {isEvaluating ? (
                         <div className="animate-pulse bg-muted h-5 w-10 rounded"></div>
                       ) : (
                         <Badge 
-                          variant={bin.event_rate > 0.5 ? "default" : "outline"}
+                          variant={regressionFlag === 1 ? "outline" : bin.event_rate > 0.5 ? "default" : "outline"}
                           className="text-xs h-5 px-2"
                         >
-                          {formatEventRate(bin.event_rate)}
+                          {regressionFlag === 1
+                            ? Number(bin.event_rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : formatEventRate(bin.event_rate)}
                         </Badge>
                       )}
                     </div>
