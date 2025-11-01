@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import ImportTreeDialog from "@/components/ImportTreeDialog";
 import { apiService } from "@/services/api";
+import { authService } from "@/services/authService";
 import { useToast } from "@/hooks/use-toast";
 
 const Dashboard = () => {
@@ -87,7 +88,13 @@ const Dashboard = () => {
                 <h1 className="text-xl font-semibold text-foreground">Decision Tree Builder</h1>
               </div>
             </div>
-            <Button variant="outline" onClick={() => navigate("/")}>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                authService.logout();
+                navigate("/");
+              }}
+            >
               Sign Out
             </Button>
           </div>

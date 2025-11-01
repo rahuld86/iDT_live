@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { RedBoxLogo } from "./RedBoxLogo";
+import { authService } from "@/services/authService";
 
 export const LoginForm = () => {
   const [username, setUsername] = useState("");
@@ -13,6 +14,7 @@ export const LoginForm = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,18 +30,28 @@ export const LoginForm = () => {
 
     setIsLoading(true);
     
-    // Simulate login process
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await authService.login(username.trim(), password);
+      
       toast({
         title: "Welcome!",
-        description: "Login successful. Redirecting to dashboard...",
+        description: "Login successful. Redirecting...",
       });
-      // Redirect to dashboard after successful login
+      
+      // Redirect to intended destination or dashboard
+      const from = (location.state as any)?.from || "/dashboard";
       setTimeout(() => {
-        navigate("/dashboard");
+        navigate(from, { replace: true });
       }, 500);
-    }, 1500);
+    } catch (error) {
+      setIsLoading(false);
+      const errorMessage = error instanceof Error ? error.message : "Login failed. Please try again.";
+      toast({
+        title: "Login Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
   };
 
   return (

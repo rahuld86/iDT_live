@@ -25,16 +25,28 @@ class ApiService {
     console.log(`Making API request to: ${url}`);
     console.log('Request options:', options);
     
+    // Get auth token
+    const token = this.getAuthToken();
+    
     const defaultOptions: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
       },
     };
 
+    // Add Authorization header if token exists (except for login endpoint)
+    if (token && !endpoint.includes('/login')) {
+      (defaultOptions.headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+    }
+
     // If the body is FormData, don't set Content-Type header
     // Let the browser set it with the proper boundary
     if (options.body instanceof FormData) {
-      delete defaultOptions.headers;
+      const headers: Record<string, string> = {};
+      if (token && !endpoint.includes('/login')) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      defaultOptions.headers = headers;
     }
 
     const config = { ...defaultOptions, ...options };
@@ -44,6 +56,17 @@ class ApiService {
       
       console.log(`Response status: ${response.status}`);
       console.log(`Response headers:`, response.headers);
+
+      // Handle 401 Unauthorized - token invalid or expired
+      if (response.status === 401) {
+        // Clear token and redirect to login
+        this.clearAuth();
+        // Only redirect if not already on login page
+        if (typeof window !== 'undefined' && !window.location.pathname.includes('/')) {
+          window.location.href = '/';
+        }
+        throw new Error('Unauthorized - please login again');
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -87,12 +110,29 @@ class ApiService {
       console.log(`Making file upload request to: ${url}`);
       console.log('Uploading file:', file.name, 'Size:', file.size, 'bytes');
       
+      // Get auth token for file uploads
+      const token = this.getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(url, {
         method: 'POST',
+        headers: headers,
         body: formData, // Use FormData for file uploads (don't set Content-Type header)
       });
       
       console.log(`File upload response status: ${response.status}`);
+      
+      // Handle 401 Unauthorized
+      if (response.status === 401) {
+        this.clearAuth();
+        if (typeof window !== 'undefined' && !window.location.pathname.includes('/')) {
+          window.location.href = '/';
+        }
+        throw new Error('Unauthorized - please login again');
+      }
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -403,13 +443,37 @@ class ApiService {
       const formData = new FormData();
       formData.append('file', file);
       
-      return this.makeRequest<{ node_master: any }>('/importTree', {
+      // Get auth token for FormData requests
+      const token = this.getAuthToken();
+      const url = `${API_BASE_URL}/importTree`;
+      
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(url, {
         method: 'POST',
+        headers: headers,
         body: formData,
-        headers: {
-          // Don't set Content-Type header - let the browser set it with boundary for FormData
-        },
       });
+      
+      // Handle 401 Unauthorized
+      if (response.status === 401) {
+        this.clearAuth();
+        if (typeof window !== 'undefined' && !window.location.pathname.includes('/')) {
+          window.location.href = '/';
+        }
+        throw new Error('Unauthorized - please login again');
+      }
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      }
+      
+      const responseText = await response.text();
+      return JSON.parse(responseText);
     }
   }
 

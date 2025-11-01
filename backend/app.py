@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import pandas as pd
 import numpy as np
 import os
@@ -151,6 +152,14 @@ load_dotenv()
 CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*').split(',')
 CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
 
+# Configure JWT
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'change-this-secret-key')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 86400))  # 24 hours default
+jwt = JWTManager(app)
+
+# Import auth utilities
+from auth import verify_user
+
 # Global state management - better than scattered global variables
 class TreeState:
     def __init__(self):
@@ -204,7 +213,57 @@ def test():
     """Test endpoint to verify backend is working"""
     return jsonify({"message": "Backend is working", "timestamp": str(datetime.now())})
 
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Login endpoint - authenticates user and returns JWT token"""
+    try:
+        data = request.get_json()
+        if not data:
+            return handle_error("No JSON data provided", 400)
+        
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            return handle_error("Username and password are required", 400)
+        
+        # Verify credentials
+        if verify_user(username, password):
+            # Create JWT token
+            access_token = create_access_token(identity=username)
+            return jsonify({
+                'access_token': access_token,
+                'username': username,
+                'message': 'Login successful'
+            })
+        else:
+            return handle_error("Invalid username or password", 401)
+    
+    except Exception as e:
+        return handle_error(f"Login error: {str(e)}", 500)
+
+@app.route('/api/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """Logout endpoint - returns success message (JWT is stateless)"""
+    return jsonify({"message": "Logout successful"})
+
+@app.route('/api/user', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    """Get current authenticated user info"""
+    username = get_jwt_identity()
+    return jsonify({"username": username})
+
+@app.route('/api/verify', methods=['GET'])
+@jwt_required()
+def verify_token():
+    """Verify JWT token validity"""
+    username = get_jwt_identity()
+    return jsonify({"valid": True, "username": username})
+
 @app.route('/api/importTree', methods=['POST'])
+@jwt_required()
 def importTree():
     """Import an existing decision tree from JSON file"""
     try:
@@ -671,6 +730,7 @@ def importTree():
         return handle_error(str(e))
 
 @app.route('/api/getImportDiagnostics', methods=['GET'])
+@jwt_required()
 def getImportDiagnostics():
     """Get diagnostic information about the imported tree data"""
     try:
@@ -733,6 +793,7 @@ def getImportDiagnostics():
         return handle_error(str(e))
 
 @app.route('/api/upload', methods=['POST'])
+@jwt_required()
 def upload_csv():
     """Upload and validate CSV file"""
     try:
@@ -869,6 +930,7 @@ def upload_csv():
         return handle_error(str(e))
 
 @app.route('/api/setTarget', methods=['POST'])
+@jwt_required()
 def setTarget():
     """Set target variable for the decision tree"""
     try:
@@ -901,6 +963,7 @@ def setTarget():
         return handle_error(str(e))
 
 @app.route('/api/getRegressionFlag', methods=['GET'])
+@jwt_required()
 def getRegressionFlag():
     """Return current regression/classification mode flag"""
     try:
@@ -909,6 +972,7 @@ def getRegressionFlag():
         return handle_error(str(e))
 
 @app.route('/api/getTypes', methods=['GET'])
+@jwt_required()
 def getTypes():
     """Get data types for all columns except target variable"""
     try:
@@ -929,6 +993,7 @@ def getTypes():
         return handle_error(str(e))
 
 @app.route('/api/keepVar', methods=['POST'])
+@jwt_required()
 def keepVar():
     """Select variables to keep for tree building"""
     try:
@@ -977,6 +1042,7 @@ def keepVar():
         return handle_error(str(e))
 
 @app.route('/api/defineHP', methods=['POST'])
+@jwt_required()
 def defineHP():
     """Define hyperparameters for decision tree"""
     try:
@@ -1013,6 +1079,7 @@ def defineHP():
         return handle_error(str(e))
 
 @app.route('/api/initTree', methods=['POST'])
+@jwt_required()
 def initTree():
     """Initialize decision tree with root node"""
     try:
@@ -1030,6 +1097,7 @@ def initTree():
         return handle_error(str(e))
 
 @app.route('/api/autoTree', methods=['POST'])
+@jwt_required()
 def autoTree():
     """Train entire tree automatically"""
     try:
@@ -1048,6 +1116,7 @@ def autoTree():
         return handle_error(str(e))
 
 @app.route('/api/delSubTree', methods=['POST'])
+@jwt_required()
 def delSubTree():
     """Delete subtree starting from specified node"""
     try:
@@ -1090,6 +1159,7 @@ def delSubTree():
         return handle_error(str(e))
 
 @app.route('/api/autoTrainSubTree', methods=['POST'])
+@jwt_required()
 def autoTrainSubTree():
     """Automatically train subtree from specified node"""
     try:
@@ -1147,6 +1217,7 @@ def autoTrainSubTree():
         return handle_error(f"Auto train failed: {str(e)}")
 
 @app.route('/api/findSplit', methods=['POST'])
+@jwt_required()
 def findSplit():
     """Find best split for specified node"""
     try:
@@ -1176,6 +1247,7 @@ def findSplit():
         return handle_error(str(e))
 
 @app.route('/api/findVar', methods=['POST'])
+@jwt_required()
 def findVar():
     """Find top variables for splitting at specified node"""
     try:
@@ -1210,6 +1282,7 @@ def findVar():
         return handle_error(str(e))
 
 @app.route('/api/bestSplit', methods=['POST'])
+@jwt_required()
 def bestSplit():
     """Find best split for specified variable at specified node"""
     try:
@@ -1247,6 +1320,7 @@ def bestSplit():
         return handle_error(str(e))
 
 @app.route('/api/evalSplit', methods=['POST'])
+@jwt_required()
 def evalSplit():
     """Evaluate provided splits for specified node"""
     try:
@@ -1319,6 +1393,7 @@ def evalSplit():
         return handle_error(str(e))
 
 @app.route('/api/addNode', methods=['POST'])
+@jwt_required()
 def addNode():
     """Add new nodes based on provided splits"""
     try:
@@ -1392,6 +1467,7 @@ def addNode():
         return handle_error(str(e))
 
 @app.route('/api/copyNode', methods=['POST'])
+@jwt_required()
 def copyNode():
     """Copy subtree from one node to another"""
     try:
@@ -1421,6 +1497,7 @@ def copyNode():
         return handle_error(str(e))
 
 @app.route('/api/labelNode', methods=['POST'])
+@jwt_required()
 def labelNode():
     """Add label to specified node"""
     try:
@@ -1447,6 +1524,7 @@ def labelNode():
         return handle_error(str(e))
 
 @app.route('/api/exportTree', methods=['GET', 'POST'])
+@jwt_required()
 def exportTree():
     """Export current tree state as JSON. Optionally upload to S3 if s3_path is provided."""
     try:
@@ -1516,6 +1594,7 @@ def exportTree():
         return handle_error(str(e))
 
 @app.route('/api/downloadTree', methods=['GET', 'POST'])
+@jwt_required()
 def downloadTree():
     """Download current tree state as JSON file. Optionally upload to S3 if s3_path is provided."""
     try:
@@ -1581,6 +1660,7 @@ def downloadTree():
         return handle_error(str(e))
 
 @app.route('/api/getTreeData', methods=['GET'])
+@jwt_required()
 def getTreeData():
     """Get current tree data"""
     try:
@@ -1593,6 +1673,7 @@ def getTreeData():
         return handle_error(str(e))
 
 @app.route('/api/uploadFileToS3', methods=['POST'])
+@jwt_required()
 def uploadFileToS3():
     """Upload file content to S3"""
     try:
