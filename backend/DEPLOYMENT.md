@@ -141,6 +141,23 @@ server {
 Enable the site:
 
 ```bash
+# Method 1: Use the setup script (recommended)
+cd backend
+chmod +x setup_nginx.sh
+sudo ./setup_nginx.sh
+
+# Then edit the configuration file with your paths:
+sudo nano /etc/nginx/sites-available/decision-tree
+
+# Test and reload:
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Method 2: Manual setup
+# If you get "File exists" error, remove it first:
+sudo rm /etc/nginx/sites-enabled/decision-tree
+
+# Then create the link:
 sudo ln -s /etc/nginx/sites-available/decision-tree /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl restart nginx
@@ -345,6 +362,23 @@ npm install
 - Check browser console for errors
 - Verify API_BASE_URL is correct in built files
 - Make sure frontend was built: `cd frontend/tree-forge-ui && npm run build`
+
+### Nginx symbolic link errors
+
+If you get "File exists" when creating nginx symbolic link:
+
+```bash
+# Remove existing link or file
+sudo rm /etc/nginx/sites-enabled/decision-tree
+
+# Create the symbolic link
+sudo ln -s /etc/nginx/sites-available/decision-tree /etc/nginx/sites-enabled/
+
+# Or use the setup script
+cd backend
+chmod +x setup_nginx.sh
+sudo ./setup_nginx.sh
+```
 
 ### CORS errors
 - Update CORS_ORIGINS in .env file
