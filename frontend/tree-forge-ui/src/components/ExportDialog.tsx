@@ -61,18 +61,40 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
         return;
       }
       
-      // If path doesn't end with a file extension, append default filename
-      // Check if it ends with a common file extension (e.g., .json, .py, .sql, .csv, .jpg)
-      const hasFileExtension = /\.[a-zA-Z0-9]+$/.test(finalS3Path);
-      if (!hasFileExtension) {
-        // Ensure path ends with / if it's a directory
-        if (!finalS3Path.endsWith('/')) {
-          finalS3Path += '/';
-        }
-        // Append default filename with extension
+      // Parse the S3 path to check structure
+      let pathAfterProtocol = finalS3Path.replace(/^s3:\/\//, '');
+      const pathParts = pathAfterProtocol.split('/');
+      const bucket = pathParts[0];
+      let keyParts = pathParts.slice(1);
+      
+      // If only bucket is provided (no key), add default folder
+      if (keyParts.length === 0 || (keyParts.length === 1 && keyParts[0] === '')) {
+        finalS3Path = `s3://${bucket}/exports/`;
+        pathAfterProtocol = finalS3Path.replace(/^s3:\/\//, '');
+        keyParts = pathAfterProtocol.split('/').slice(1);
+      }
+      
+      // Check if the last segment looks like a filename (has extension) or is a directory
+      const lastSegment = keyParts.length > 0 ? keyParts[keyParts.length - 1] : '';
+      const hasFileExtension = lastSegment && /\.[a-zA-Z0-9]+$/.test(lastSegment);
+      
+      // If path ends with '/' or last segment has no extension (and exists), treat as directory
+      if (finalS3Path.endsWith('/')) {
+        // Directory path ending with /, append filename
+        const filename = defaultFilename.includes('.') ? defaultFilename : `${defaultFilename}.${fileExtension}`;
+        finalS3Path += filename;
+      } else if (lastSegment && !hasFileExtension) {
+        // Last segment exists but has no extension - could be directory name or filename
+        // Treat as directory (common case), append / and filename
+        finalS3Path += '/';
+        const filename = defaultFilename.includes('.') ? defaultFilename : `${defaultFilename}.${fileExtension}`;
+        finalS3Path += filename;
+      } else if (!lastSegment) {
+        // No last segment (shouldn't happen after bucket check, but handle it)
         const filename = defaultFilename.includes('.') ? defaultFilename : `${defaultFilename}.${fileExtension}`;
         finalS3Path += filename;
       }
+      // If hasFileExtension is true, the path already contains a filename, use it as-is
       
       onExport(exportMethod, finalS3Path);
     } else {
