@@ -1,10 +1,10 @@
 server {
     listen 80;
-    server_name your-domain.com;  # Change to your domain or EC2 IP
+    server_name _;  # Accept all domains/IPs, or change to your domain or EC2 IP
 
     # Frontend static files
     location / {
-        root /opt/decision-tree-app/frontend/tree-forge-ui/dist;
+        root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;  # Update this path to match your installation
         try_files $uri $uri/ /index.html;
         
         # Cache static assets

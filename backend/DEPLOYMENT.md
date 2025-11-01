@@ -384,11 +384,57 @@ npm install
 ```
 
 ### Frontend not loading
-- Check nginx configuration: `sudo nginx -t`
-- Verify dist/ directory exists and has correct permissions
-- Check browser console for errors
-- Verify API_BASE_URL is correct in built files
-- Make sure frontend was built: `cd frontend/tree-forge-ui && npm run build`
+
+If you can't access the React app via EC2 public IP:
+
+```bash
+# Run verification script
+cd backend
+chmod +x verify_deployment.sh
+./verify_deployment.sh
+```
+
+Common issues:
+
+1. **Frontend not built:**
+   ```bash
+   cd frontend/tree-forge-ui
+   VITE_API_BASE_URL=/api npm run build
+   ls -la dist/index.html  # Verify build
+   ```
+
+2. **Nginx not configured or wrong paths:**
+   ```bash
+   # Check nginx config
+   sudo cat /etc/nginx/sites-available/decision-tree | grep root
+   
+   # Should show: root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;
+   # If different, edit:
+   sudo nano /etc/nginx/sites-available/decision-tree
+   # Update root path to match your installation
+   
+   # Test and reload
+   sudo nginx -t
+   sudo systemctl reload nginx
+   ```
+
+3. **Nginx not running:**
+   ```bash
+   sudo systemctl start nginx
+   sudo systemctl enable nginx
+   ```
+
+4. **Port 80 blocked (EC2 Security Group):**
+   - Check AWS Console → EC2 → Security Groups
+   - Allow inbound HTTP (port 80) from 0.0.0.0/0
+
+5. **Check nginx logs:**
+   ```bash
+   sudo tail -f /var/log/nginx/error.log
+   sudo tail -f /var/log/nginx/access.log
+   ```
+
+See `FIX_FRONTEND_NOT_LOADING.md` for detailed troubleshooting.
 
 ### Nginx symbolic link errors
 
