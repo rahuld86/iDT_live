@@ -50,6 +50,9 @@ cd backend
 # Edit environment variables
 nano .env
 
+# Stop any existing processes (if running)
+./stop.sh
+
 # Test the deployment
 ./start.sh
 ```
@@ -255,11 +258,34 @@ curl http://localhost:5000/api/health
 
 ## Troubleshooting
 
+### Port Already in Use
+
+If you get an error that port 5000 (or your configured port) is already in use:
+
+```bash
+# Check what's using the port
+sudo lsof -i :5000
+# or
+sudo netstat -tulpn | grep :5000
+# or
+sudo ss -tulpn | grep :5000
+
+# Stop the process using the stop script
+./stop.sh
+
+# Or if using systemd
+sudo systemctl stop decision-tree-api
+
+# Then start again
+./start.sh
+```
+
 ### Backend won't start
 - Check logs: `sudo journalctl -u decision-tree-api -n 50`
 - Verify Python environment: `source venv/bin/activate && python --version`
 - Verify dependencies: `pip list`
 - Check port availability: `sudo netstat -tulpn | grep 5000`
+- Make sure virtual environment is activated: `source venv/bin/activate`
 
 ### Frontend not loading
 - Check nginx configuration: `sudo nginx -t`
