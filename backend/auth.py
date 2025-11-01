@@ -99,8 +99,17 @@ def verify_user(username, password):
     stored_hash = users[username]
     
     # Validate hash format before checking
-    if not stored_hash or not stored_hash.startswith('$'):
+    # Werkzeug supports multiple formats: bcrypt ($2b$...), scrypt (scrypt:...), pbkdf2 (pbkdf2:...)
+    if not stored_hash:
+        print(f"Warning: Empty hash for user {username}")
+        return False
+    
+    # Check if hash is in a valid format (don't require $ prefix since scrypt uses 'scrypt:' prefix)
+    valid_prefixes = ('$2b$', '$2a$', 'scrypt:', 'pbkdf2:')
+    if not any(stored_hash.startswith(prefix) for prefix in valid_prefixes):
         print(f"Warning: Invalid hash format for user {username}")
+        print(f"  Hash must start with one of: $2b$, $2a$, scrypt:, or pbkdf2:")
+        print(f"  Got: {stored_hash[:30]}...")
         return False
     
     try:

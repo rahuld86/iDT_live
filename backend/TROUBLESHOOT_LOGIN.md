@@ -1,142 +1,176 @@
-# Troubleshooting Login 500 Error
+# Troubleshooting Login Issues
 
-## Common Causes and Fixes
+## Common Issues
 
-### 1. Check Backend Logs
+### 1. "Invalid username or password" (401 Error)
+
+#### Check if user is loaded
 ```bash
-# If using systemd
-sudo journalctl -u decision-tree-api -n 50 --no-pager
-
-# Or check gunicorn logs directly
-tail -50 /var/log/gunicorn/error.log
-
-# Or if running manually, check terminal output
+sudo journalctl -u decision-tree-api -n 50 --no-pager | grep -i "loaded user"
 ```
 
-### 2. Missing JWT_SECRET_KEY in .env
-**Error:** "JWT_SECRET_KEY not configured" or similar
+You should see: `Loaded user: idfcuser`
 
-**Fix:**
+If not, check:
+- `.env` file format
+- Hash format is valid
+- No extra spaces or newlines
+
+#### Verify .env file format
+```bash
+cd ~/project_iDT_2/backend
+cat .env | grep AUTH_USERS
+```
+
+Should be exactly:
+```
+AUTH_USERS=idfcuser:scrypt:32768:8:1$salt$hash...
+```
+
+**No spaces, no quotes, on one line.**
+
+#### Test password verification directly
 ```bash
 cd ~/project_iDT_2/backend
 source venv/bin/activate
 
-# Generate a secure key
-JWT_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
-echo "JWT_SECRET_KEY=$JWT_KEY" >> .env
+python3 << EOF
+import os
+from dotenv import load_dotenv
+load_dotenv()
+from auth import verify_user
 
-# Or manually add to .env:
-nano .env
-# Add: JWT_SECRET_KEY=your-generated-secret-key-here
+# Test with your actual password
+result = verify_user('idfcuser', 'analytics@1234')
+print(f"Verification result: {result}")
+EOF
 ```
 
-### 3. Missing Flask-JWT-Extended Package
-**Error:** "No module named 'flask_jwt_extended'" or ImportError
+This should print: `Verification result: True`
 
-**Fix:**
-```bash
-cd ~/project_iDT_2/backend
-source venv/bin/activate
-pip install Flask-JWT-Extended==4.6.0
-pip install werkzeug==3.0.3
-```
+### 2. "Invalid hash method" (500 Error)
 
-### 4. AUTH_USERS Not Set or Invalid Format
-**Error:** User verification fails or empty users dict
+This means the hash format is invalid. 
 
-**Fix:**
+**Solution:** Generate a new hash:
 ```bash
 cd ~/project_iDT_2/backend
 source venv/bin/activate
 
-# Generate password hash for idfcuser
-python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('yourpassword'))"
-
-# Update .env file
-nano .env
-# Add or update:
-# AUTH_USERS=idfcuser:$2b$12$generated_hash_here
+python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('analytics@1234'))"
 ```
 
-### 5. .env File Not Loaded
-**Error:** Environment variables not found
-
-**Fix:**
+Copy the complete hash and update `.env`:
 ```bash
-cd ~/project_iDT_2/backend
-
-# Check if .env exists
-ls -la .env
-
-# If not, create from example
-cp env.example .env
-
-# Then edit it:
 nano .env
+# Update AUTH_USERS line with the new hash
 ```
 
-### 6. Check Backend Service Status
+Then restart:
 ```bash
-# Check if backend is running
-sudo systemctl status decision-tree-api
-
-# Restart if needed
 sudo systemctl restart decision-tree-api
-
-# Check logs
-sudo journalctl -u decision-tree-api -f
 ```
 
-### 7. Verify Dependencies Installed
-```bash
-cd ~/project_iDT_2/backend
-source venv/bin/activate
-pip list | grep -i jwt
-pip list | grep -i werkzeug
+### 3. Environment Variables Not Loading
 
-# Should show:
-# Flask-JWT-Extended 4.6.0
-# werkzeug 3.0.3
+If changes to `.env` aren't being picked up:
+
+1. **Restart the service:**
+```bash
+sudo systemctl restart decision-tree-api
 ```
 
-### 8. Test Login Endpoint Manually
+2. **Check service status:**
 ```bash
-# Test if backend is responding
-curl http://localhost:5000/api/test
+sudo systemctl status decision-tree-api
+```
 
-# Test login endpoint
+3. **Verify .env is in the right location:**
+```bash
+ls -la ~/project_iDT_2/backend/.env
+```
+
+Should show the file exists.
+
+### 4. Check Backend Logs for Errors
+
+```bash
+sudo journalctl -u decision-tree-api -n 100 --no-pager
+```
+
+Look for:
+- `Loaded user: idfcuser` (success)
+- `Warning: Invalid hash format` (hash problem)
+- `Warning: No valid users loaded` (.env problem)
+- `Error verifying password hash` (verification problem)
+
+### 5. Test Login via curl
+
+```bash
 curl -X POST http://localhost:5000/api/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"idfcuser","password":"yourpassword"}'
+  -d '{"username":"idfcuser","password":"analytics@1234"}'
 ```
 
-### 9. Check Python Import Errors
+Should return:
+```json
+{
+  "access_token": "...",
+  "username": "idfcuser",
+  "message": "Login successful"
+}
+```
+
+If you get an error, check the response body for details.
+
+## Debugging Steps
+
+1. **Verify hash was generated correctly:**
 ```bash
 cd ~/project_iDT_2/backend
 source venv/bin/activate
-python -c "from flask_jwt_extended import create_access_token; print('JWT import OK')"
-python -c "from auth import verify_user; print('Auth import OK')"
+python -c "from werkzeug.security import generate_password_hash, check_password_hash; h=generate_password_hash('analytics@1234'); print(f'Hash: {h}'); print(f'Test: {check_password_hash(h, \"analytics@1234\")}')"
 ```
 
-## Quick Fix Checklist
+Should print `Test: True`
 
-1. ✅ JWT_SECRET_KEY set in .env
-2. ✅ AUTH_USERS set in .env with valid hash
-3. ✅ Flask-JWT-Extended installed
-4. ✅ werkzeug installed
-5. ✅ Backend service restarted after .env changes
-6. ✅ Backend logs show specific error
-
-## Most Common Issue
-
-**Missing JWT_SECRET_KEY in .env file**
-
-Solution:
+2. **Verify .env is being loaded:**
 ```bash
 cd ~/project_iDT_2/backend
 source venv/bin/activate
-python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
+python3 << EOF
+import os
+from dotenv import load_dotenv
+load_dotenv()
+auth_users = os.getenv('AUTH_USERS', '')
+print(f"AUTH_USERS length: {len(auth_users)}")
+print(f"AUTH_USERS preview: {auth_users[:80]}...")
+EOF
 ```
 
-Copy the output and add it to your `.env` file, then restart the backend.
+3. **Check if user is in the loaded users dict:**
+```bash
+cd ~/project_iDT_2/backend
+source venv/bin/activate
+python3 << EOF
+from auth import load_users
+users = load_users()
+print(f"Users loaded: {list(users.keys())}")
+if 'idfcuser' in users:
+    hash_val = users['idfcuser']
+    print(f"Hash starts with: {hash_val[:20]}...")
+    print(f"Hash length: {len(hash_val)}")
+else:
+    print("ERROR: idfcuser not found in loaded users!")
+EOF
+```
 
+## Valid Hash Formats
+
+Werkzeug supports multiple hash formats:
+
+1. **bcrypt:** `$2b$12$salt_hash...` (60 chars)
+2. **scrypt:** `scrypt:32768:8:1$salt$hash...` (longer)
+3. **pbkdf2:** `pbkdf2:sha256:260000$salt$hash...` (longer)
+
+All are valid. The code now supports all three formats.
