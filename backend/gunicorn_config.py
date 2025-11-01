@@ -7,7 +7,11 @@ bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
 backlog = 2048
 
 # Worker processes
-workers = int(os.getenv('WEB_CONCURRENCY', multiprocessing.cpu_count() * 2 + 1))
+# NOTE: This app uses in-memory state (tree_state) which is not shared across workers.
+# Using multiple workers causes state to be lost between requests.
+# For production, use sticky sessions or implement shared state (Redis/database).
+# Setting to 1 worker to ensure state consistency.
+workers = int(os.getenv('WEB_CONCURRENCY', 1))
 worker_class = 'sync'
 worker_connections = 1000
 timeout = 30
