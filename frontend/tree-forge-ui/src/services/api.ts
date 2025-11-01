@@ -1,6 +1,6 @@
 // API service for decision tree application
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = '/api/api';
 
 export interface UploadResponse {
   rows: number;
