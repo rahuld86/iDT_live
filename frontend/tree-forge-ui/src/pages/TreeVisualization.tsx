@@ -235,8 +235,17 @@ if __name__ == "__main__":
         setIsExporting(false);
       }
     } else {
-      const blob = new Blob([pythonCode], { type: 'text/python' });
-      saveAs(blob, filename);
+      // Use data URL instead of blob to avoid HTTPS warnings
+      const dataUrl = `data:text/python;charset=utf-8,${encodeURIComponent(pythonCode)}`;
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+      }, 100);
       toast({
         title: "Export Successful",
         description: "Python code has been exported successfully!",
@@ -408,8 +417,17 @@ FROM your_table;
         setIsExporting(false);
       }
     } else {
-      const blob = new Blob([sqlCode], { type: 'text/sql' });
-      saveAs(blob, filename);
+      // Use data URL instead of blob to avoid HTTPS warnings
+      const dataUrl = `data:text/sql;charset=utf-8,${encodeURIComponent(sqlCode)}`;
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+      }, 100);
       toast({
         title: "Export Successful",
         description: "SQL code has been exported successfully!",
@@ -492,8 +510,17 @@ FROM your_table;
         setIsExporting(false);
       }
     } else {
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      saveAs(blob, filename);
+      // Use data URL instead of blob to avoid HTTPS warnings
+      const dataUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(csvContent)}`;
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+      }, 100);
       toast({
         title: "Export Successful",
         description: "Node report has been exported successfully!",
@@ -736,8 +763,17 @@ FROM your_table;
             }
           }
           
-          // Download locally
-          saveAs(blob, filename);
+          // Download locally - use data URL to avoid HTTPS warnings
+          const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+          const link = document.createElement('a');
+          link.href = imageDataUrl;
+          link.download = filename;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            document.body.removeChild(link);
+          }, 100);
           toast({
             title: "Snapshot Saved",
             description: `Decision tree saved as ${filename}`,
@@ -764,6 +800,7 @@ FROM your_table;
   };
 
   const handleSaveTree = () => {
+    console.log("Opening export dialog for save tree");
     setExportType("save_tree");
     setExportDialogOpen(true);
   };
@@ -826,15 +863,17 @@ FROM your_table;
       }
       
       // Fallback for unsupported browsers - traditional download
-      const blob = new Blob([treeJson], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      // Use data URL instead of blob URL to avoid HTTPS warnings on HTTP pages
+      const dataUrl = `data:application/json;charset=utf-8,${encodeURIComponent(treeJson)}`;
       const link = document.createElement('a');
-      link.href = url;
+      link.href = dataUrl;
       link.download = filename;
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      setTimeout(() => {
+        document.body.removeChild(link);
+      }, 100);
       
       toast({
         title: "Success",
@@ -855,9 +894,13 @@ FROM your_table;
 
   // Unified export handler
   const handleExport = (method: ExportMethod, s3Path?: string) => {
+    const currentType = exportType; // Store before closing dialog
+    
+    // Close dialog first
     setExportDialogOpen(false);
     
-    switch (exportType) {
+    // Execute export based on type
+    switch (currentType) {
       case "snapshot":
         executeSnapshot(method, s3Path);
         break;
@@ -873,9 +916,14 @@ FROM your_table;
       case "save_tree":
         executeSaveTree(method, s3Path);
         break;
+      default:
+        console.warn("Unknown export type:", currentType);
     }
     
-    setExportType(null);
+    // Reset export type after a short delay to ensure dialog closes
+    setTimeout(() => {
+      setExportType(null);
+    }, 100);
   };
 
   // Get export dialog props based on type

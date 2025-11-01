@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,15 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
   const [s3Path, setS3Path] = useState("");
   const { toast } = useToast();
 
+  // Reset state when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      // Dialog just opened, reset to defaults
+      setExportMethod("download");
+      setS3Path("");
+    }
+  }, [isOpen]);
+
   const handleExport = () => {
     if (exportMethod === "s3") {
       if (!s3Path.trim()) {
@@ -56,6 +65,7 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
   };
 
   const handleClose = () => {
+    if (isLoading) return; // Prevent closing while exporting
     setExportMethod("download");
     setS3Path("");
     onClose();
@@ -65,7 +75,11 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
   const suggestedS3Path = `s3://my-bucket/${defaultFilename}`;
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open && !isLoading) {
+        handleClose();
+      }
+    }}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
