@@ -1,0 +1,17 @@
+[Unit]
+Description=Decision Tree API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/decision-tree-app/backend
+Environment="PATH=/opt/decision-tree-app/backend/venv/bin"
+EnvironmentFile=/opt/decision-tree-app/backend/.env
+ExecStart=/opt/decision-tree-app/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:5000 wsgi:app
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

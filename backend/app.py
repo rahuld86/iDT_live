@@ -12,6 +12,96 @@ from util import (
     add_label, classify_dtype, create_node_datasets, find_var_regression, best_split_regression
 )
 
+# S3 support
+try:
+    import boto3
+    from botocore.exceptions import ClientError, NoCredentialsError
+    S3_AVAILABLE = True
+except ImportError:
+    S3_AVAILABLE = False
+    print("Warning: boto3 not available. S3 functionality will be disabled.")
+
+def get_s3_client():
+    """Get S3 client with credentials from environment variables"""
+    if not S3_AVAILABLE:
+        return None
+    
+    try:
+        return boto3.client(
+            's3',
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.getenv('AWS_REGION', 'us-east-1')
+        )
+    except Exception as e:
+        print(f"Warning: Could not initialize S3 client: {e}")
+        return None
+
+def is_s3_path(path):
+    """Check if path is an S3 path (s3://bucket/key)"""
+    return path and (path.startswith('s3://') or path.startswith('s3a://') or path.startswith('s3n://'))
+
+def parse_s3_path(s3_path):
+    """Parse S3 path into bucket and key"""
+    if not s3_path:
+        return None, None
+    
+    # Remove protocol
+    path = s3_path.replace('s3://', '').replace('s3a://', '').replace('s3n://', '')
+    
+    # Split into bucket and key
+    parts = path.split('/', 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    elif len(parts) == 1:
+        return parts[0], ''
+    else:
+        return None, None
+
+def download_from_s3(s3_path, local_path):
+    """Download file from S3 to local path"""
+    if not S3_AVAILABLE:
+        raise ValueError("S3 support not available. Please install boto3.")
+    
+    bucket, key = parse_s3_path(s3_path)
+    if not bucket:
+        raise ValueError(f"Invalid S3 path: {s3_path}. Missing bucket name.")
+    if not key:
+        raise ValueError(f"Invalid S3 path: {s3_path}. Missing key/path. Format: s3://bucket/key")
+    
+    s3_client = get_s3_client()
+    if not s3_client:
+        raise ValueError("Could not initialize S3 client. Check AWS credentials.")
+    
+    try:
+        s3_client.download_file(bucket, key, local_path)
+        print(f"Successfully downloaded {s3_path} to {local_path}")
+        return local_path
+    except ClientError as e:
+        raise ValueError(f"Failed to download from S3: {str(e)}")
+
+def upload_to_s3(local_path, s3_path):
+    """Upload file from local path to S3"""
+    if not S3_AVAILABLE:
+        raise ValueError("S3 support not available. Please install boto3.")
+    
+    bucket, key = parse_s3_path(s3_path)
+    if not bucket:
+        raise ValueError(f"Invalid S3 path: {s3_path}. Missing bucket name.")
+    if not key:
+        raise ValueError(f"Invalid S3 path: {s3_path}. Missing key/path. Format: s3://bucket/key")
+    
+    s3_client = get_s3_client()
+    if not s3_client:
+        raise ValueError("Could not initialize S3 client. Check AWS credentials.")
+    
+    try:
+        s3_client.upload_file(local_path, bucket, key)
+        print(f"Successfully uploaded {local_path} to {s3_path}")
+        return s3_path
+    except ClientError as e:
+        raise ValueError(f"Failed to upload to S3: {str(e)}")
+
 def df_to_json_safe(df):
     """Convert DataFrame to JSON-safe format by replacing NaN with None"""
     if df is None or df.empty:
@@ -52,7 +142,14 @@ def df_to_json_safe(df):
     return result
 
 app = Flask(__name__)
-CORS(app)
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+# Configure CORS for production
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*').split(',')
+CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
 
 # Global state management - better than scattered global variables
 class TreeState:
@@ -189,8 +286,31 @@ def importTree():
             if file_name.lower().endswith('.csv'):
                 print("CSV file detected in URL case - routing to upload endpoint")
                 # For CSV files, we need to process them like the upload endpoint
+                # Check if it's an S3 path
+                if is_s3_path(file_name):
+                    # Handle S3 - download the file
+                    try:
+                        # Create uploads directory if it doesn't exist
+                        upload_dir = os.path.join(os.getcwd(), 'uploads')
+                        os.makedirs(upload_dir, exist_ok=True)
+                        
+                        # Generate unique filename
+                        import uuid
+                        unique_filename = f"{uuid.uuid4()}_s3_downloaded.csv"
+                        file_path = os.path.join(upload_dir, unique_filename)
+                        
+                        # Download from S3
+                        download_from_s3(file_name, file_path)
+                        
+                        # Load CSV file
+                        tree_state.df = pd.read_csv(file_path)
+                        tree_state.file_name = file_path
+                        tree_state.original_data_source = file_name  # Store original S3 path
+                        
+                    except Exception as e:
+                        return handle_error(f"Failed to download file from S3: {str(e)}", 400)
                 # Check if it's a URL or local file path
-                if file_name.startswith(('http://', 'https://')):
+                elif file_name.startswith(('http://', 'https://')):
                     # Handle URL - download the file
                     import requests
                     import tempfile
@@ -294,8 +414,31 @@ def importTree():
         if original_file_name and original_file_name.lower().endswith('.csv'):
             print("JSON contains CSV file path - processing as CSV import")
             try:
+                # Check if it's an S3 path
+                if is_s3_path(original_file_name):
+                    # Handle S3 - download the file
+                    try:
+                        # Create uploads directory if it doesn't exist
+                        upload_dir = os.path.join(os.getcwd(), 'uploads')
+                        os.makedirs(upload_dir, exist_ok=True)
+                        
+                        # Generate unique filename
+                        import uuid
+                        unique_filename = f"{uuid.uuid4()}_s3_imported.csv"
+                        file_path = os.path.join(upload_dir, unique_filename)
+                        
+                        # Download from S3
+                        download_from_s3(original_file_name, file_path)
+                        
+                        # Load CSV file
+                        tree_state.df = pd.read_csv(file_path)
+                        print(f"Successfully loaded data from S3: {original_file_name}")
+                        
+                    except Exception as e:
+                        print(f"Failed to download from S3: {e}. Creating mock dataset...")
+                        raise e
                 # Check if it's a URL or local file path
-                if original_file_name.startswith(('http://', 'https://')):
+                elif original_file_name.startswith(('http://', 'https://')):
                     # Handle URL - download the file
                     import requests
                     import tempfile
@@ -583,8 +726,31 @@ def upload_csv():
             
             file_name = data.get("file")
             
+            # Check if it's an S3 path
+            if is_s3_path(file_name):
+                # Handle S3 - download the file
+                try:
+                    # Create uploads directory if it doesn't exist
+                    upload_dir = os.path.join(os.getcwd(), 'uploads')
+                    os.makedirs(upload_dir, exist_ok=True)
+                    
+                    # Generate unique filename
+                    import uuid
+                    unique_filename = f"{uuid.uuid4()}_s3_downloaded.csv"
+                    file_path = os.path.join(upload_dir, unique_filename)
+                    
+                    # Download from S3
+                    download_from_s3(file_name, file_path)
+                    
+                    # Load CSV file
+                    tree_state.df = pd.read_csv(file_path)
+                    tree_state.file_name = file_path
+                    tree_state.original_data_source = file_name  # Store original S3 path
+                    
+                except Exception as e:
+                    return handle_error(f"Failed to download file from S3: {str(e)}", 400)
             # Check if it's a URL or local file path
-            if file_name.startswith(('http://', 'https://')):
+            elif file_name.startswith(('http://', 'https://')):
                 # Handle URL - download the file
                 import requests
                 import tempfile
@@ -1227,13 +1393,58 @@ def labelNode():
     except Exception as e:
         return handle_error(str(e))
 
-@app.route('/api/exportTree', methods=['GET'])
+@app.route('/api/exportTree', methods=['GET', 'POST'])
 def exportTree():
-    """Export current tree state as JSON"""
+    """Export current tree state as JSON. Optionally upload to S3 if s3_path is provided."""
     try:
         if tree_state.node_master is None:
             return handle_error("No tree to export. Please initialize tree first.", 400)
         
+        # Check if S3 path is provided
+        s3_path = None
+        if request.method == 'POST':
+            data = request.get_json()
+            if data and 's3_path' in data:
+                s3_path = data.get('s3_path')
+        
+        # If S3 path provided, upload to S3
+        if s3_path:
+            if not is_s3_path(s3_path):
+                return handle_error("Invalid S3 path format. Expected format: s3://bucket/key", 400)
+            
+            # Create temporary file with export data
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+                export_data = {
+                    'file_name': tree_state.original_data_source or tree_state.file_name,
+                    'badflag': tree_state.badflag,
+                    'max_depth': tree_state.max_depth,
+                    'min_node_split': tree_state.min_node_split,
+                    'min_leaf_size': tree_state.min_leaf_size,
+                    'max_branches': tree_state.max_branches,
+                    'criteria': tree_state.criteria,
+                    'unique_var': tree_state.unique_var,
+                    'monotonous': tree_state.monotonous,
+                    'mapper': df_to_json_safe(tree_state.df_col),
+                    'node_master': df_to_json_safe(tree_state.node_master)
+                }
+                json.dump(export_data, tmp_file, indent=2)
+                tmp_path = tmp_file.name
+            
+            try:
+                # Upload to S3
+                upload_to_s3(tmp_path, s3_path)
+                os.unlink(tmp_path)  # Clean up temp file
+                return jsonify({
+                    'message': f'Tree exported successfully to {s3_path}',
+                    's3_path': s3_path,
+                    'export_data': export_data
+                })
+            except Exception as e:
+                os.unlink(tmp_path)  # Clean up temp file on error
+                return handle_error(f"Failed to upload to S3: {str(e)}", 500)
+        
+        # Return JSON response
         return jsonify({
             'file_name': tree_state.file_name,
             'badflag': tree_state.badflag,
@@ -1251,12 +1462,21 @@ def exportTree():
     except Exception as e:
         return handle_error(str(e))
 
-@app.route('/api/downloadTree', methods=['GET'])
+@app.route('/api/downloadTree', methods=['GET', 'POST'])
 def downloadTree():
-    """Download current tree state as JSON file"""
+    """Download current tree state as JSON file. Optionally upload to S3 if s3_path is provided."""
     try:
         if tree_state.node_master is None:
             return handle_error("No tree to download. Please initialize tree first.", 400)
+        
+        # Check if S3 path is provided
+        s3_path = None
+        if request.method == 'POST':
+            data = request.get_json()
+            if data and 's3_path' in data:
+                s3_path = data.get('s3_path')
+        elif request.method == 'GET':
+            s3_path = request.args.get('s3_path')
         
         data = {
             'file_name': tree_state.original_data_source or tree_state.file_name,  # Use original data source if available
@@ -1272,6 +1492,30 @@ def downloadTree():
             'node_master': df_to_json_safe(tree_state.node_master)
         }
         
+        # If S3 path provided, upload to S3
+        if s3_path:
+            if not is_s3_path(s3_path):
+                return handle_error("Invalid S3 path format. Expected format: s3://bucket/key", 400)
+            
+            # Create temporary file with export data
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+                json.dump(data, tmp_file, indent=2)
+                tmp_path = tmp_file.name
+            
+            try:
+                # Upload to S3
+                upload_to_s3(tmp_path, s3_path)
+                os.unlink(tmp_path)  # Clean up temp file
+                return jsonify({
+                    'message': f'Tree downloaded successfully to {s3_path}',
+                    's3_path': s3_path
+                })
+            except Exception as e:
+                os.unlink(tmp_path)  # Clean up temp file on error
+                return handle_error(f"Failed to upload to S3: {str(e)}", 500)
+        
+        # Return file download
         json_str = json.dumps(data, indent=2)
         response = Response(
             json_str,
@@ -1301,4 +1545,7 @@ def health_check():
     return jsonify({"status": "healthy", "message": "Decision Tree API is running"})
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Development server only
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    port = int(os.getenv('FLASK_PORT', '5000'))
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)

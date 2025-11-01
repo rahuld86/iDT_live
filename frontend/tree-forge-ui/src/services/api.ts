@@ -1,6 +1,7 @@
 // API service for decision tree application
 
-const API_BASE_URL = '/api/api';
+// Use environment variable at build time, fallback to relative path
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export interface UploadResponse {
   rows: number;
