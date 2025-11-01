@@ -269,7 +269,7 @@ class ApiService {
     });
   }
 
-  async downloadTree(): Promise<{ 
+  async downloadTree(s3Path?: string): Promise<{ 
     file_name: string;
     badflag: string;
     max_depth: string;
@@ -281,7 +281,13 @@ class ApiService {
     monotonous: string;
     mapper: any;
     node_master: any;
-  }> {
+  } | { message: string; s3_path: string }> {
+    if (s3Path) {
+      return this.makeRequest<{ message: string; s3_path: string }>('/downloadTree', {
+        method: 'POST',
+        body: JSON.stringify({ s3_path: s3Path }),
+      });
+    }
     return this.makeRequest<{ 
       file_name: string;
       badflag: string;
@@ -296,6 +302,30 @@ class ApiService {
       node_master: any;
     }>('/downloadTree', {
       method: 'GET',
+    });
+  }
+
+  async exportTree(s3Path?: string): Promise<any> {
+    if (s3Path) {
+      return this.makeRequest<{ message: string; s3_path: string }>('/exportTree', {
+        method: 'POST',
+        body: JSON.stringify({ s3_path: s3Path }),
+      });
+    }
+    return this.makeRequest('/exportTree', {
+      method: 'GET',
+    });
+  }
+
+  async uploadFileToS3(content: string, filename: string, contentType: string, s3Path: string): Promise<{ message: string; s3_path: string }> {
+    return this.makeRequest<{ message: string; s3_path: string }>('/uploadFileToS3', {
+      method: 'POST',
+      body: JSON.stringify({
+        content,
+        filename,
+        content_type: contentType,
+        s3_path: s3Path,
+      }),
     });
   }
 

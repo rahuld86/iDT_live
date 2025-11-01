@@ -6,6 +6,7 @@ import { useState, useRef, useEffect } from "react";
 import DecisionTreeRenderer from "@/components/DecisionTreeRenderer";
 import NodeColorSettings from "@/components/NodeColorSettings";
 import TreeAttributesDialog from "@/components/TreeAttributesDialog";
+import ExportDialog, { ExportMethod } from "@/components/ExportDialog";
 import { ColorConfig, TreeAttributes } from "@/types";
 import { apiService } from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
@@ -64,6 +65,11 @@ const TreeVisualization = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set([1])); // Root node expanded by default
   const [regressionFlag, setRegressionFlag] = useState<number>(0); // 0 = Binary Classification, 1 = Regression
+  
+  // Export dialog state
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportType, setExportType] = useState<"snapshot" | "python" | "sql" | "node_report" | "save_tree" | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   
   // Pinch zoom state
   const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
@@ -202,13 +208,40 @@ if __name__ == "__main__":
 
   // Export Python code
   const handleExportPython = () => {
+    setExportType("python");
+    setExportDialogOpen(true);
+  };
+
+  const executeExportPython = async (method: ExportMethod, s3Path?: string) => {
     const pythonCode = generatePythonCode(nodeMaster);
-    const blob = new Blob([pythonCode], { type: 'text/python' });
-    saveAs(blob, 'decision_tree_predictor.py');
-    toast({
-      title: "Export Successful",
-      description: "Python code has been exported successfully!",
-    });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `decision_tree_predictor_${timestamp}.py`;
+    
+    if (method === "s3" && s3Path) {
+      setIsExporting(true);
+      try {
+        await apiService.uploadFileToS3(pythonCode, filename, 'text/python', s3Path);
+        toast({
+          title: "Export Successful",
+          description: `Python code uploaded to S3: ${s3Path}`,
+        });
+      } catch (error) {
+        toast({
+          title: "Export Failed",
+          description: "Failed to upload Python code to S3. Please try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsExporting(false);
+      }
+    } else {
+      const blob = new Blob([pythonCode], { type: 'text/python' });
+      saveAs(blob, filename);
+      toast({
+        title: "Export Successful",
+        description: "Python code has been exported successfully!",
+      });
+    }
   };
 
   // Generate SQL code from node rules
@@ -348,13 +381,40 @@ FROM your_table;
 
   // Export SQL code
   const handleExportSQL = () => {
+    setExportType("sql");
+    setExportDialogOpen(true);
+  };
+
+  const executeExportSQL = async (method: ExportMethod, s3Path?: string) => {
     const sqlCode = generateSQLCode(nodeMaster);
-    const blob = new Blob([sqlCode], { type: 'text/sql' });
-    saveAs(blob, 'decision_tree_predictor.sql');
-    toast({
-      title: "Export Successful",
-      description: "SQL code has been exported successfully!",
-    });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `decision_tree_predictor_${timestamp}.sql`;
+    
+    if (method === "s3" && s3Path) {
+      setIsExporting(true);
+      try {
+        await apiService.uploadFileToS3(sqlCode, filename, 'text/sql', s3Path);
+        toast({
+          title: "Export Successful",
+          description: `SQL code uploaded to S3: ${s3Path}`,
+        });
+      } catch (error) {
+        toast({
+          title: "Export Failed",
+          description: "Failed to upload SQL code to S3. Please try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsExporting(false);
+      }
+    } else {
+      const blob = new Blob([sqlCode], { type: 'text/sql' });
+      saveAs(blob, filename);
+      toast({
+        title: "Export Successful",
+        description: "SQL code has been exported successfully!",
+      });
+    }
   };
 
   // Generate Node Report CSV
@@ -405,13 +465,40 @@ FROM your_table;
 
   // Export Node report as CSV
   const handleExportNodeReport = () => {
+    setExportType("node_report");
+    setExportDialogOpen(true);
+  };
+
+  const executeExportNodeReport = async (method: ExportMethod, s3Path?: string) => {
     const csvContent = generateNodeReportCSV(nodeMaster);
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    saveAs(blob, 'node_report.csv');
-    toast({
-      title: "Export Successful",
-      description: "Node report has been exported successfully!",
-    });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `node_report_${timestamp}.csv`;
+    
+    if (method === "s3" && s3Path) {
+      setIsExporting(true);
+      try {
+        await apiService.uploadFileToS3(csvContent, filename, 'text/csv', s3Path);
+        toast({
+          title: "Export Successful",
+          description: `Node report uploaded to S3: ${s3Path}`,
+        });
+      } catch (error) {
+        toast({
+          title: "Export Failed",
+          description: "Failed to upload node report to S3. Please try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsExporting(false);
+      }
+    } else {
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      saveAs(blob, filename);
+      toast({
+        title: "Export Successful",
+        description: "Node report has been exported successfully!",
+      });
+    }
   };
 
 
@@ -531,7 +618,12 @@ FROM your_table;
   };
 
   // Snapshot functionality
-  const handleSnapshot = async () => {
+  const handleSnapshot = () => {
+    setExportType("snapshot");
+    setExportDialogOpen(true);
+  };
+
+  const executeSnapshot = async (method: ExportMethod, s3Path?: string) => {
     if (!treeRef.current) {
       toast({
         title: "Error",
@@ -542,11 +634,20 @@ FROM your_table;
     }
 
     try {
+      setIsExporting(true);
+      
       // Show loading toast
-      toast({
-        title: "Creating Snapshot",
-        description: "Capturing decision tree as image...",
-      });
+      if (method === "s3") {
+        toast({
+          title: "Creating Snapshot",
+          description: "Capturing decision tree and uploading to S3...",
+        });
+      } else {
+        toast({
+          title: "Creating Snapshot",
+          description: "Capturing decision tree as image...",
+        });
+      }
 
       // Find the SVG element within the tree container
       const svgElement = treeRef.current.querySelector('svg');
@@ -585,23 +686,70 @@ FROM your_table;
       // Clean up the temporary container
       document.body.removeChild(tempContainer);
 
-      // Convert canvas to blob and save as JPG
-      canvas.toBlob((blob) => {
+      // Convert canvas to blob
+      canvas.toBlob(async (blob) => {
         if (blob) {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
           const filename = `decision-tree-${timestamp}.jpg`;
-          saveAs(blob, filename);
           
+          if (method === "s3" && s3Path) {
+            try {
+              // Convert blob to base64 for S3 upload
+              const reader = new FileReader();
+              reader.onloadend = async () => {
+                try {
+                  const base64data = reader.result as string;
+                  const base64Content = base64data.split(',')[1]; // Remove data:image/jpeg;base64, prefix
+                  await apiService.uploadFileToS3(base64Content, filename, 'image/jpeg', s3Path);
+                  toast({
+                    title: "Snapshot Saved",
+                    description: `Decision tree snapshot uploaded to S3: ${s3Path}`,
+                  });
+                } catch (error) {
+                  toast({
+                    title: "Error",
+                    description: "Failed to upload snapshot to S3. Please try again.",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setIsExporting(false);
+                }
+              };
+              reader.onerror = () => {
+                toast({
+                  title: "Error",
+                  description: "Failed to convert image. Please try again.",
+                  variant: "destructive",
+                });
+                setIsExporting(false);
+              };
+              reader.readAsDataURL(blob);
+              return;
+            } catch (error) {
+              toast({
+                title: "Error",
+                description: "Failed to upload snapshot to S3. Please try again.",
+                variant: "destructive",
+              });
+              setIsExporting(false);
+              return;
+            }
+          }
+          
+          // Download locally
+          saveAs(blob, filename);
           toast({
             title: "Snapshot Saved",
             description: `Decision tree saved as ${filename}`,
           });
+          setIsExporting(false);
         } else {
           toast({
             title: "Error",
             description: "Failed to create image. Please try again.",
             variant: "destructive",
           });
+          setIsExporting(false);
         }
       }, 'image/jpeg', 0.9);
 
@@ -615,8 +763,28 @@ FROM your_table;
     }
   };
 
-  const handleSaveTree = async () => {
+  const handleSaveTree = () => {
+    setExportType("save_tree");
+    setExportDialogOpen(true);
+  };
+
+  const executeSaveTree = async (method: ExportMethod, s3Path?: string) => {
     try {
+      setIsExporting(true);
+      
+      if (method === "s3" && s3Path) {
+        // Use API to download and upload to S3
+        const result = await apiService.downloadTree(s3Path);
+        if ('message' in result) {
+          toast({
+            title: "Success",
+            description: result.message,
+          });
+        }
+        setIsExporting(false);
+        return;
+      }
+      
       // Call the API to get the tree data
       const treeData = await apiService.downloadTree();
       
@@ -680,6 +848,52 @@ FROM your_table;
         description: "Failed to save tree. Please try again.",
         variant: "destructive",
       });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Unified export handler
+  const handleExport = (method: ExportMethod, s3Path?: string) => {
+    setExportDialogOpen(false);
+    
+    switch (exportType) {
+      case "snapshot":
+        executeSnapshot(method, s3Path);
+        break;
+      case "python":
+        executeExportPython(method, s3Path);
+        break;
+      case "sql":
+        executeExportSQL(method, s3Path);
+        break;
+      case "node_report":
+        executeExportNodeReport(method, s3Path);
+        break;
+      case "save_tree":
+        executeSaveTree(method, s3Path);
+        break;
+    }
+    
+    setExportType(null);
+  };
+
+  // Get export dialog props based on type
+  const getExportDialogProps = () => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    switch (exportType) {
+      case "snapshot":
+        return { defaultFilename: `decision-tree-${timestamp}`, fileExtension: "jpg" };
+      case "python":
+        return { defaultFilename: `decision_tree_predictor_${timestamp}`, fileExtension: "py" };
+      case "sql":
+        return { defaultFilename: `decision_tree_predictor_${timestamp}`, fileExtension: "sql" };
+      case "node_report":
+        return { defaultFilename: `node_report_${timestamp}`, fileExtension: "csv" };
+      case "save_tree":
+        return { defaultFilename: `decision_tree_${timestamp}`, fileExtension: "json" };
+      default:
+        return { defaultFilename: "export", fileExtension: "txt" };
     }
   };
 
@@ -812,6 +1026,21 @@ FROM your_table;
         currentAttributes={treeAttributes}
         onAttributesUpdated={setTreeAttributes}
       />
+      
+      {/* Export Dialog */}
+      {exportType && (
+        <ExportDialog
+          isOpen={exportDialogOpen}
+          onClose={() => {
+            setExportDialogOpen(false);
+            setExportType(null);
+          }}
+          onExport={handleExport}
+          defaultFilename={getExportDialogProps().defaultFilename}
+          fileExtension={getExportDialogProps().fileExtension}
+          isLoading={isExporting}
+        />
+      )}
     </div>
   );
 };

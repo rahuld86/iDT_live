@@ -1592,6 +1592,68 @@ def getTreeData():
     except Exception as e:
         return handle_error(str(e))
 
+@app.route('/api/uploadFileToS3', methods=['POST'])
+def uploadFileToS3():
+    """Upload file content to S3"""
+    try:
+        data = request.get_json()
+        if not data:
+            return handle_error("No JSON data provided", 400)
+        
+        # Validate required fields
+        is_valid, error_msg = validate_required_fields(data, ["content", "filename", "s3_path"])
+        if not is_valid:
+            return handle_error(error_msg, 400)
+        
+        content = data.get("content")
+        filename = data.get("filename")
+        content_type = data.get("content_type", "text/plain")
+        s3_path = data.get("s3_path")
+        
+        # Validate S3 path
+        if not is_s3_path(s3_path):
+            return handle_error("Invalid S3 path format. Expected format: s3://bucket/key", 400)
+        
+        # Create temporary file with content
+        import tempfile
+        import base64
+        
+        # Handle base64 content for binary files (images)
+        if content_type.startswith('image/'):
+            # Content is base64 encoded, decode it first
+            try:
+                # Remove data URL prefix if present
+                if ',' in content:
+                    base64_content = content.split(',')[1]
+                else:
+                    base64_content = content
+                decoded_content = base64.b64decode(base64_content)
+                with tempfile.NamedTemporaryFile(mode='wb', suffix=f"_{filename}", delete=False) as tmp_file:
+                    tmp_file.write(decoded_content)
+                    tmp_path = tmp_file.name
+            except Exception as e:
+                return handle_error(f"Invalid base64 content: {str(e)}", 400)
+        else:
+            # Regular text content
+            with tempfile.NamedTemporaryFile(mode='w', suffix=f"_{filename}", delete=False, encoding='utf-8') as tmp_file:
+                tmp_file.write(content)
+                tmp_path = tmp_file.name
+        
+        try:
+            # Upload to S3
+            upload_to_s3(tmp_path, s3_path)
+            os.unlink(tmp_path)  # Clean up temp file
+            return jsonify({
+                'message': f'File uploaded successfully to {s3_path}',
+                's3_path': s3_path
+            })
+        except Exception as e:
+            os.unlink(tmp_path)  # Clean up temp file on error
+            return handle_error(f"Failed to upload to S3: {str(e)}", 500)
+    
+    except Exception as e:
+        return handle_error(str(e))
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
