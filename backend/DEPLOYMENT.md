@@ -429,19 +429,24 @@ Common issues:
    - Check AWS Console → EC2 → Security Groups
    - Allow inbound HTTP (port 80) from 0.0.0.0/0
 
-5. **Nginx 500 error:**
+5. **Nginx 500 error (Permission denied):**
    ```bash
    # Check error logs for specific issue
    sudo tail -20 /var/log/nginx/error.log
    
-   # Run fix script
+   # If you see "Permission denied (13)":
    cd backend
-   chmod +x fix_nginx_500.sh
-   ./fix_nginx_500.sh
+   chmod +x fix_permissions.sh
+   sudo ./fix_permissions.sh
+   
+   # Or manual fix:
+   sudo chmod -R 755 ~/project_iDT_2/frontend/tree-forge-ui/dist
+   sudo chmod +x ~/project_iDT_2 ~/project_iDT_2/frontend ~/project_iDT_2/frontend/tree-forge-ui
+   sudo systemctl reload nginx
    
    # Common fixes:
-   # 1. Wrong root path - update nginx config
-   # 2. Permission issues - fix with: sudo chmod -R 755 /path/to/dist
+   # 1. Permission issues - most common: fix with chmod -R 755 on dist and +x on parent dirs
+   # 2. Wrong root path - update nginx config
    # 3. Frontend not built - rebuild frontend
    ```
 

@@ -57,25 +57,37 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 2. Permission Issues
+### 2. Permission Issues (Most Common - "Permission denied")
 
-**Check:**
+**Error:** `stat() "/home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist/index.html" failed (13: Permission denied)`
+
+**Quick Fix Script:**
 ```bash
-# Check permissions
-ls -ld ~/project_iDT_2/frontend/tree-forge-ui/dist
-
-# Check if nginx user can read
-sudo -u www-data test -r ~/project_iDT_2/frontend/tree-forge-ui/dist
+cd ~/project_iDT_2/backend
+chmod +x fix_permissions.sh
+sudo ./fix_permissions.sh
 ```
 
-**Fix:**
+**Manual Fix:**
 ```bash
-# Fix permissions
+# Fix permissions on dist directory
 sudo chmod -R 755 ~/project_iDT_2/frontend/tree-forge-ui/dist
 
-# Or change ownership (alternative)
+# Fix permissions on parent directories (nginx needs execute to traverse)
+sudo chmod +x ~/project_iDT_2
+sudo chmod +x ~/project_iDT_2/frontend
+sudo chmod +x ~/project_iDT_2/frontend/tree-forge-ui
+
+# Verify nginx can read
+sudo -u www-data test -r ~/project_iDT_2/frontend/tree-forge-ui/dist
+
+# If still fails, change ownership:
 sudo chown -R www-data:www-data ~/project_iDT_2/frontend/tree-forge-ui/dist
 ```
+
+**Important:** Nginx user (www-data) needs:
+- Read permission (`r`) on all files
+- Execute permission (`x`) on all directories (to traverse the path)
 
 ### 3. Frontend Not Built
 
