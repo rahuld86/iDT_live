@@ -382,13 +382,66 @@ def importTree():
                 })
             else:
                 # Handle JSON file
-                # Validate file exists
-                is_valid, error_msg = validate_file_exists(file_name)
-                if not is_valid:
-                    return handle_error(error_msg, 404)
-                
-                with open(file_name, "r") as f:
-                    data = json.load(f)
+                # Check if it's an S3 path
+                if is_s3_path(file_name):
+                    # Handle S3 - download the file first
+                    try:
+                        # Create uploads directory if it doesn't exist
+                        upload_dir = os.path.join(os.getcwd(), 'uploads')
+                        os.makedirs(upload_dir, exist_ok=True)
+                        
+                        # Generate unique filename
+                        import uuid
+                        unique_filename = f"{uuid.uuid4()}_s3_imported.json"
+                        file_path = os.path.join(upload_dir, unique_filename)
+                        
+                        # Download from S3
+                        download_from_s3(file_name, file_path)
+                        
+                        # Load JSON from downloaded file
+                        with open(file_path, "r") as f:
+                            data = json.load(f)
+                        print(f"Successfully loaded JSON tree from S3: {file_name}")
+                        
+                    except Exception as e:
+                        return handle_error(f"Failed to download JSON file from S3: {str(e)}", 400)
+                elif file_name.startswith(('http://', 'https://')):
+                    # Handle URL - download the file first
+                    import requests
+                    
+                    try:
+                        response = requests.get(file_name)
+                        response.raise_for_status()
+                        
+                        # Create uploads directory if it doesn't exist
+                        upload_dir = os.path.join(os.getcwd(), 'uploads')
+                        os.makedirs(upload_dir, exist_ok=True)
+                        
+                        # Generate unique filename
+                        import uuid
+                        unique_filename = f"{uuid.uuid4()}_downloaded.json"
+                        file_path = os.path.join(upload_dir, unique_filename)
+                        
+                        # Save downloaded file
+                        with open(file_path, 'wb') as f:
+                            f.write(response.content)
+                        
+                        # Load JSON from downloaded file
+                        with open(file_path, "r") as f:
+                            data = json.load(f)
+                        print(f"Successfully loaded JSON tree from URL: {file_name}")
+                        
+                    except requests.RequestException as e:
+                        return handle_error(f"Failed to download JSON file from URL: {str(e)}", 400)
+                else:
+                    # Handle local file path
+                    # Validate file exists
+                    is_valid, error_msg = validate_file_exists(file_name)
+                    if not is_valid:
+                        return handle_error(error_msg, 404)
+                    
+                    with open(file_name, "r") as f:
+                        data = json.load(f)
         
         # Load tree configuration
         tree_state.file_name = data.get("file_name")
