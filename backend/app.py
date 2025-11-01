@@ -66,7 +66,7 @@ def download_from_s3(s3_path, local_path):
     
     bucket, key = parse_s3_path(s3_path)
     if not bucket:
-        raise ValueError(f"Invalid S3 path: {s3_path}. Missing bucket name.")
+        raise ValueError(f"Invalid S3 path: {s3_path}. Missing bucket name. Format: s3://bucket/key")
     if not key:
         raise ValueError(f"Invalid S3 path: {s3_path}. Missing key/path. Format: s3://bucket/key")
     
@@ -75,11 +75,27 @@ def download_from_s3(s3_path, local_path):
         raise ValueError("Could not initialize S3 client. Check AWS credentials.")
     
     try:
+        # First check if the object exists
+        s3_client.head_object(Bucket=bucket, Key=key)
+        # If exists, download it
         s3_client.download_file(bucket, key, local_path)
         print(f"Successfully downloaded {s3_path} to {local_path}")
         return local_path
     except ClientError as e:
-        raise ValueError(f"Failed to download from S3: {str(e)}")
+        error_code = e.response.get('Error', {}).get('Code', '')
+        if error_code == '404' or error_code == 'NoSuchKey':
+            raise ValueError(f"File not found in S3: {s3_path}. Please verify:\n"
+                           f"1. The bucket name is correct: {bucket}\n"
+                           f"2. The file path/key is correct: {key}\n"
+                           f"3. The file exists in the S3 bucket\n"
+                           f"4. You have read permissions for this S3 object")
+        elif error_code == '403' or error_code == 'AccessDenied':
+            raise ValueError(f"Access denied for S3 path: {s3_path}. Please check:\n"
+                           f"1. AWS credentials have read permissions for bucket: {bucket}\n"
+                           f"2. The file/key exists and you have access: {key}")
+        else:
+            raise ValueError(f"Failed to download from S3: {str(e)}\n"
+                           f"Bucket: {bucket}, Key: {key}")
 
 def upload_to_s3(local_path, s3_path):
     """Upload file from local path to S3"""
