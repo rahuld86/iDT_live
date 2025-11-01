@@ -76,10 +76,13 @@ sudo rm -f /etc/nginx/sites-enabled/decision-tree
 # 4. Create symbolic link
 sudo ln -s /etc/nginx/sites-available/decision-tree /etc/nginx/sites-enabled/
 
-# 5. Remove default nginx site (optional)
+# 5. Remove default nginx site (important to avoid conflicts)
 sudo rm -f /etc/nginx/sites-enabled/default
 
-# 6. Test configuration
+# 6. Update decision-tree config to use default_server
+sudo sed -i 's/listen 80;/listen 80 default_server;/' /etc/nginx/sites-available/decision-tree
+
+# 7. Test configuration
 sudo nginx -t
 
 # 7. Reload nginx

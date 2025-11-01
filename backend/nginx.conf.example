@@ -1,5 +1,5 @@
 server {
-    listen 80;
+    listen 80 default_server;
     server_name _;  # Accept all domains/IPs, or change to your domain or EC2 IP
 
     # Frontend static files

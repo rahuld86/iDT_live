@@ -107,8 +107,8 @@ Add the following configuration:
 
 ```nginx
 server {
-    listen 80;
-    server_name your-domain.com;  # Change to your domain or EC2 IP
+    listen 80 default_server;
+    server_name _;  # Accept all domains/IPs (use '_' for EC2 without domain, or specific IP/domain)
 
     # Frontend static files
     location / {
