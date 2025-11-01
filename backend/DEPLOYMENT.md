@@ -154,7 +154,17 @@ sudo systemctl restart nginx
 cd frontend/tree-forge-ui
 
 # Install dependencies
-npm install
+# If you get ENOTEMPTY errors, use the clean install script:
+chmod +x clean_install.sh
+./clean_install.sh
+
+# Or manually:
+# npm install
+
+# If you encounter npm errors:
+# rm -rf node_modules package-lock.json
+# npm cache clean --force
+# npm install
 
 # Build for production
 # Set API URL if different from /api
@@ -308,11 +318,33 @@ sudo systemctl start decision-tree-api
 - Check port availability: `sudo netstat -tulpn | grep 5000`
 - Make sure virtual environment is activated: `source venv/bin/activate`
 
+### Frontend npm install errors
+
+If you get `ENOTEMPTY` or other npm errors:
+
+```bash
+cd frontend/tree-forge-ui
+
+# Use the clean install script (recommended)
+chmod +x clean_install.sh
+./clean_install.sh
+
+# Or manually clean and reinstall
+rm -rf node_modules package-lock.json
+npm cache clean --force
+npm install
+
+# If you get permission errors:
+sudo chown -R $USER:$USER node_modules
+npm install
+```
+
 ### Frontend not loading
 - Check nginx configuration: `sudo nginx -t`
 - Verify dist/ directory exists and has correct permissions
 - Check browser console for errors
 - Verify API_BASE_URL is correct in built files
+- Make sure frontend was built: `cd frontend/tree-forge-ui && npm run build`
 
 ### CORS errors
 - Update CORS_ORIGINS in .env file
