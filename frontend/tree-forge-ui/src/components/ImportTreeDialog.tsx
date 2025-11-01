@@ -163,17 +163,17 @@ const ImportTreeDialog: React.FC<ImportTreeDialogProps> = ({
           {uploadMethod === "url" && (
             <div className="space-y-4">
               <Label htmlFor="file-url" className="text-sm font-medium">
-                Enter File URL
+                Enter File URL or S3 Path
               </Label>
               <Input
                 id="file-url"
-                type="url"
-                placeholder="https://example.com/decision_tree.json"
+                type="text"
+                placeholder="https://example.com/file.csv or s3://bucket-name/path/to/file.csv"
                 value={fileUrl}
                 onChange={(e) => setFileUrl(e.target.value)}
               />
               <p className="text-sm text-muted-foreground">
-                Enter the URL of a JSON or CSV file containing your decision tree data or raw data.
+                Enter the URL (http:// or https://) or S3 path (s3://) of a JSON or CSV file containing your decision tree data or raw data.
               </p>
             </div>
           )}

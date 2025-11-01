@@ -61,15 +61,40 @@ sudo systemctl reload nginx
 
 **Error:** `stat() "/home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist/index.html" failed (13: Permission denied)`
 
-**Quick Fix Script:**
+**MOST COMMON ROOT CAUSE:** `/home/ubuntu` is **700** (not 755), so nginx can't traverse into the home directory.
+
+**Critical Fix (Try This First):**
+```bash
+# Check home directory permissions
+ls -ld /home/ubuntu
+# If shows drwx------ (700), that's the problem!
+
+# Fix home directory permissions (CRITICAL)
+sudo chmod 755 /home/ubuntu
+
+# Verify nginx can traverse
+sudo -u www-data test -x /home/ubuntu && echo "SUCCESS" || echo "STILL FAILED"
+
+# Reload nginx
+sudo systemctl reload nginx
+```
+
+**Comprehensive Fix Script:**
 ```bash
 cd ~/project_iDT_2/backend
 chmod +x fix_permissions.sh
 sudo ./fix_permissions.sh
+# This checks and fixes ALL parent directories including /home/ubuntu
 ```
 
-**Manual Fix:**
+**Manual Fix (if script doesn't work):**
 ```bash
+# Fix home directory (MOST IMPORTANT)
+sudo chmod 755 /home/ubuntu
+
+# Fix /home directory if needed
+sudo chmod 755 /home
+
 # Fix permissions on dist directory
 sudo chmod -R 755 ~/project_iDT_2/frontend/tree-forge-ui/dist
 
@@ -79,15 +104,16 @@ sudo chmod +x ~/project_iDT_2/frontend
 sudo chmod +x ~/project_iDT_2/frontend/tree-forge-ui
 
 # Verify nginx can read
-sudo -u www-data test -r ~/project_iDT_2/frontend/tree-forge-ui/dist
+sudo -u www-data test -r ~/project_iDT_2/frontend/tree-forge-ui/dist/index.html
 
-# If still fails, change ownership:
-sudo chown -R www-data:www-data ~/project_iDT_2/frontend/tree-forge-ui/dist
+# Reload nginx
+sudo systemctl reload nginx
 ```
 
 **Important:** Nginx user (www-data) needs:
 - Read permission (`r`) on all files
-- Execute permission (`x`) on all directories (to traverse the path)
+- Execute permission (`x`) on **ALL directories in the path**, including `/home` and `/home/ubuntu`
+- If `/home/ubuntu` is 700, nginx **cannot** traverse into it, even if all subdirectories are 755
 
 ### 3. Frontend Not Built
 

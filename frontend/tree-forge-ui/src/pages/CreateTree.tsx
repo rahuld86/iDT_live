@@ -96,8 +96,8 @@ const CreateTree = () => {
     setFileUrl(url);
     setSelectedFile(null); // Clear file when URL is entered
     
-    // Basic URL validation
-    if (url && !url.match(/^https?:\/\/.+/)) {
+    // Basic URL validation - accept http/https URLs and S3 paths
+    if (url && !url.match(/^(https?:\/\/|s3:\/\/).+/)) {
       // Don't show error immediately, let user finish typing
       // We'll validate on submit
     }
@@ -113,11 +113,11 @@ const CreateTree = () => {
       return;
     }
 
-    // Validate URL if provided
-    if (fileUrl && !fileUrl.match(/^https?:\/\/.+/)) {
+    // Validate URL if provided - accept http/https URLs or S3 paths
+    if (fileUrl && !fileUrl.match(/^(https?:\/\/|s3:\/\/).+/)) {
       toast({
         title: "Invalid URL",
-        description: "Please enter a valid URL starting with http:// or https://",
+        description: "Please enter a valid URL starting with http://, https://, or an S3 path starting with s3://",
         variant: "destructive",
       });
       return;
@@ -486,18 +486,18 @@ const CreateTree = () => {
                 {uploadMethod === "url" && (
                   <div className="space-y-4">
                     <Label htmlFor="file-url" className="text-sm font-medium">
-                      CSV File URL
+                      CSV File URL or S3 Path
                     </Label>
                     <Input
                       id="file-url"
-                      type="url"
-                      placeholder="https://example.com/data.csv"
+                      type="text"
+                      placeholder="https://example.com/data.csv or s3://bucket-name/path/to/data.csv"
                       value={fileUrl}
                       onChange={handleUrlChange}
                       className="w-full"
                     />
                     <p className="text-sm text-muted-foreground">
-                      Enter the direct URL to your CSV file
+                      Enter the direct URL (http:// or https://) or S3 path (s3://) to your CSV file
                     </p>
                   </div>
                 )}

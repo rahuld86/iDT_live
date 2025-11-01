@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# Quick fix for nginx permission denied errors
+# Comprehensive fix for nginx permission denied errors
+# This script checks and fixes ALL parent directory permissions
 
-echo "=== Fixing Nginx Permissions ==="
+echo "=== Fixing Nginx Permissions (Comprehensive) ==="
 echo ""
 
 FRONTEND_DIST="$HOME/project_iDT_2/frontend/tree-forge-ui/dist"
@@ -13,60 +14,150 @@ if [ ! -d "$FRONTEND_DIST" ]; then
     exit 1
 fi
 
-echo "Fixing permissions for: $FRONTEND_DIST"
+echo "Checking full path: $FRONTEND_DIST"
 echo ""
 
-# Fix permissions - make readable by all (including nginx www-data user)
-echo "1. Setting permissions to 755 (readable by all)..."
-sudo chmod -R 755 "$FRONTEND_DIST"
-echo "✓ Permissions set"
+# Check ALL parent directories from root
+echo "1. Checking ALL parent directory permissions (root to dist)..."
+echo "---"
 
-# Verify nginx can read
-echo ""
-echo "2. Verifying nginx user can read..."
-if sudo -u www-data test -r "$FRONTEND_DIST" && sudo -u www-data test -r "$FRONTEND_DIST/index.html"; then
-    echo "✓ Nginx user (www-data) can now read files"
-else
-    echo "⚠ Nginx user still cannot read - trying ownership change..."
-    sudo chown -R www-data:www-data "$FRONTEND_DIST"
-    echo "✓ Changed ownership to www-data"
-fi
+FULL_PATH="$FRONTEND_DIST"
+PARENT_DIRS=()
 
-# Check parent directories - nginx needs execute permission on parent dirs
-echo ""
-echo "3. Checking parent directory permissions..."
-PARENT_DIRS=(
-    "$HOME"
-    "$HOME/project_iDT_2"
-    "$HOME/project_iDT_2/frontend"
-    "$HOME/project_iDT_2/frontend/tree-forge-ui"
-)
+# Build list of all parent directories
+while [ "$FULL_PATH" != "/" ]; do
+    PARENT_DIRS+=("$FULL_PATH")
+    FULL_PATH=$(dirname "$FULL_PATH")
+done
 
-for DIR in "${PARENT_DIRS[@]}"; do
+# Reverse the array to go from root to dist
+for (( idx=${#PARENT_DIRS[@]}-1 ; idx>=0 ; idx-- )); do
+    DIR="${PARENT_DIRS[idx]}"
     if [ -d "$DIR" ]; then
-        # Ensure execute permission for directory traversal
-        sudo chmod +x "$DIR"
-        if sudo -u www-data test -x "$DIR"; then
-            echo "✓ $DIR is accessible"
+        PERMS=$(stat -c "%a" "$DIR" 2>/dev/null)
+        OWNER=$(stat -c "%U:%G" "$DIR" 2>/dev/null)
+        echo "  $DIR"
+        echo "    Permissions: $PERMS, Owner: $OWNER"
+        
+        # Check if nginx can traverse
+        if sudo -u www-data test -x "$DIR" 2>/dev/null; then
+            echo "    ✓ Nginx can traverse"
         else
-            echo "✗ $DIR is NOT accessible to nginx"
-            sudo chmod 755 "$DIR"
+            echo "    ✗ Nginx CANNOT traverse - FIXING..."
+            sudo chmod +x "$DIR"
+            if sudo -u www-data test -x "$DIR" 2>/dev/null; then
+                echo "    ✓ Fixed"
+            else
+                echo "    ✗ Still not accessible - trying 755..."
+                sudo chmod 755 "$DIR"
+            fi
         fi
     fi
 done
 
+echo "---"
 echo ""
-echo "4. Verifying final permissions..."
-ls -ld "$FRONTEND_DIST"
-ls -l "$FRONTEND_DIST/index.html" 2>/dev/null | head -1
+
+# Special check for /home directory
+echo "2. Checking /home directory (often problematic)..."
+if [ -d "/home" ]; then
+    HOME_PERMS=$(stat -c "%a" "/home" 2>/dev/null)
+    echo "  /home permissions: $HOME_PERMS"
+    if [ "$HOME_PERMS" != "755" ] && [ "$HOME_PERMS" != "755" ]; then
+        echo "  ⚠ /home might need execute permission"
+        sudo chmod +x /home
+    fi
+    if sudo -u www-data test -x /home 2>/dev/null; then
+        echo "  ✓ /home is accessible to nginx"
+    else
+        echo "  ✗ /home is NOT accessible - FIXING..."
+        sudo chmod 755 /home
+    fi
+fi
+
+echo ""
+
+# Special check for /home/ubuntu directory
+echo "3. Checking /home/ubuntu directory (often 700 by default)..."
+if [ -d "$HOME" ]; then
+    HOME_PERMS=$(stat -c "%a" "$HOME" 2>/dev/null)
+    OWNER=$(stat -c "%U:%G" "$HOME" 2>/dev/null)
+    echo "  $HOME permissions: $HOME_PERMS, Owner: $OWNER"
+    
+    if [ "$HOME_PERMS" = "700" ]; then
+        echo "  ⚠ /home/ubuntu is 700 (only owner can access)"
+        echo "  Fixing to 755..."
+        sudo chmod 755 "$HOME"
+        echo "  ✓ Changed to 755"
+    fi
+    
+    if sudo -u www-data test -x "$HOME" 2>/dev/null; then
+        echo "  ✓ /home/ubuntu is accessible to nginx"
+    else
+        echo "  ✗ /home/ubuntu is NOT accessible - trying ownership..."
+        # Don't change ownership of home directory, just permissions
+        sudo chmod 755 "$HOME"
+    fi
+fi
+
+echo ""
+
+# Fix dist directory permissions
+echo "4. Fixing dist directory permissions..."
+sudo chmod -R 755 "$FRONTEND_DIST"
+echo "✓ Dist directory permissions set"
+
+# Fix all parent directories explicitly
+echo ""
+echo "5. Ensuring all parent directories are traversable..."
+sudo chmod +x "$HOME/project_iDT_2"
+sudo chmod +x "$HOME/project_iDT_2/frontend"
+sudo chmod +x "$HOME/project_iDT_2/frontend/tree-forge-ui"
+echo "✓ Parent directories updated"
+
+echo ""
+
+# Final verification - test full path access
+echo "6. Final verification - testing full path access..."
+FULL_TEST=true
+
+# Test each directory in path
+TEST_PATH="/"
+for DIR in home ubuntu project_iDT_2 frontend tree-forge-ui dist; do
+    TEST_PATH="${TEST_PATH%/}/${DIR}"
+    if sudo -u www-data test -x "$TEST_PATH" 2>/dev/null; then
+        echo "  ✓ $TEST_PATH accessible"
+    else
+        echo "  ✗ $TEST_PATH NOT accessible"
+        FULL_TEST=false
+    fi
+done
+
+if [ "$FULL_TEST" = true ]; then
+    # Test reading the actual file
+    if sudo -u www-data test -r "$FRONTEND_DIST/index.html" 2>/dev/null; then
+        echo ""
+        echo "✓✓✓ All checks passed! Nginx should be able to read files now."
+    else
+        echo ""
+        echo "⚠ Path is accessible but can't read index.html - checking file permissions..."
+        ls -l "$FRONTEND_DIST/index.html"
+        sudo chmod 644 "$FRONTEND_DIST/index.html"
+        sudo chmod 644 "$FRONTEND_DIST"/* 2>/dev/null || true
+    fi
+else
+    echo ""
+    echo "✗ Path is still not fully accessible"
+    echo "  Trying alternative: change ownership..."
+    sudo chown -R www-data:www-data "$FRONTEND_DIST"
+fi
 
 echo ""
 echo "=== Summary ==="
 echo ""
-echo "✓ Permissions fixed"
-echo ""
-echo "Next steps:"
-echo "1. Reload nginx: sudo systemctl reload nginx"
-echo "2. Test: curl http://localhost"
+echo "If issues persist, consider:"
+echo "1. Moving files to /var/www/html (standard location)"
+echo "2. Checking SELinux/AppArmor if enabled"
+echo "3. Verifying nginx user: ps aux | grep nginx"
 echo ""
 

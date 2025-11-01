@@ -429,26 +429,37 @@ Common issues:
    - Check AWS Console → EC2 → Security Groups
    - Allow inbound HTTP (port 80) from 0.0.0.0/0
 
-5. **Nginx 500 error (Permission denied):**
+5. **Nginx 500 error (Permission denied - persistent):**
    ```bash
    # Check error logs for specific issue
    sudo tail -20 /var/log/nginx/error.log
    
-   # If you see "Permission denied (13)":
+   # If you see "Permission denied (13)" and basic fixes don't work:
+   
+   # MOST COMMON ISSUE: /home/ubuntu is 700 (not accessible to nginx)
+   ls -ld /home/ubuntu
+   # If shows drwx------ (700), fix it:
+   sudo chmod 755 /home/ubuntu
+   
+   # Verify nginx can traverse
+   sudo -u www-data test -x /home/ubuntu && echo "SUCCESS" || echo "STILL FAILED"
+   
+   # Run comprehensive fix script (checks ALL parent dirs)
    cd backend
    chmod +x fix_permissions.sh
    sudo ./fix_permissions.sh
    
-   # Or manual fix:
-   sudo chmod -R 755 ~/project_iDT_2/frontend/tree-forge-ui/dist
-   sudo chmod +x ~/project_iDT_2 ~/project_iDT_2/frontend ~/project_iDT_2/frontend/tree-forge-ui
+   # Reload nginx
    sudo systemctl reload nginx
    
-   # Common fixes:
-   # 1. Permission issues - most common: fix with chmod -R 755 on dist and +x on parent dirs
-   # 2. Wrong root path - update nginx config
-   # 3. Frontend not built - rebuild frontend
+   # Alternative: Move to standard location (if home dir is problematic)
+   sudo mkdir -p /var/www/decision-tree
+   sudo cp -r ~/project_iDT_2/frontend/tree-forge-ui/dist/* /var/www/decision-tree/
+   sudo chown -R www-data:www-data /var/www/decision-tree
+   # Then update nginx config root to: /var/www/decision-tree;
    ```
+   
+   **Common Issue:** `/home/ubuntu` is 700 by default on Ubuntu. Nginx user cannot traverse into it. Fix: `sudo chmod 755 /home/ubuntu`
 
 6. **Check nginx logs:**
    ```bash
