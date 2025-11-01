@@ -263,6 +263,18 @@ curl http://localhost:5000/api/health
 If you get an error that port 5000 (or your configured port) is already in use:
 
 ```bash
+# Method 1: Use the stop script (recommended)
+./stop.sh
+
+# Method 2: If stop.sh doesn't work, use aggressive cleanup
+chmod +x kill_port.sh
+./kill_port.sh 5000
+
+# Method 3: Manual cleanup
+# First, stop systemd service
+sudo systemctl stop decision-tree-api
+sudo systemctl disable decision-tree-api
+
 # Check what's using the port
 sudo lsof -i :5000
 # or
@@ -270,15 +282,24 @@ sudo netstat -tulpn | grep :5000
 # or
 sudo ss -tulpn | grep :5000
 
-# Stop the process using the stop script
-./stop.sh
+# Kill all processes (replace PID with actual PID from above)
+sudo kill -9 <PID>
 
-# Or if using systemd
-sudo systemctl stop decision-tree-api
+# Kill all gunicorn processes
+ps aux | grep gunicorn | grep -v grep | awk '{print $2}' | xargs sudo kill -9
+
+# Verify port is free
+./check_port.sh 5000
 
 # Then start again
 ./start.sh
+
+# Or restart systemd service
+sudo systemctl enable decision-tree-api
+sudo systemctl start decision-tree-api
 ```
+
+**Note:** The systemd service now includes a pre-start check that will automatically clean up the port before starting. If you're using systemd, make sure to update your service file with the latest configuration from `systemd.service.example`.
 
 ### Backend won't start
 - Check logs: `sudo journalctl -u decision-tree-api -n 50`
