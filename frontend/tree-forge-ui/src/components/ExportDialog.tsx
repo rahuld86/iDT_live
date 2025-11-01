@@ -44,24 +44,40 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
       if (!s3Path.trim()) {
         toast({
           title: "S3 Path Required",
-          description: "Please enter an S3 path (e.g., s3://bucket-name/path/to/file)",
+          description: "Please enter an S3 bucket path (e.g., s3://bucket-name/path/to/folder)",
           variant: "destructive",
         });
         return;
       }
       
       // Validate S3 path format
-      if (!s3Path.trim().match(/^s3:\/\/.+/)) {
+      let finalS3Path = s3Path.trim();
+      if (!finalS3Path.match(/^s3:\/\/.+/)) {
         toast({
           title: "Invalid S3 Path",
-          description: "S3 path must start with s3:// (e.g., s3://bucket-name/path/to/file)",
+          description: "S3 path must start with s3:// (e.g., s3://bucket-name/path/to/folder)",
           variant: "destructive",
         });
         return;
       }
+      
+      // If path doesn't end with a file extension, append default filename
+      // Check if it ends with a common file extension (e.g., .json, .py, .sql, .csv, .jpg)
+      const hasFileExtension = /\.[a-zA-Z0-9]+$/.test(finalS3Path);
+      if (!hasFileExtension) {
+        // Ensure path ends with / if it's a directory
+        if (!finalS3Path.endsWith('/')) {
+          finalS3Path += '/';
+        }
+        // Append default filename with extension
+        const filename = defaultFilename.includes('.') ? defaultFilename : `${defaultFilename}.${fileExtension}`;
+        finalS3Path += filename;
+      }
+      
+      onExport(exportMethod, finalS3Path);
+    } else {
+      onExport(exportMethod, undefined);
     }
-    
-    onExport(exportMethod, s3Path || undefined);
   };
 
   const handleClose = () => {
@@ -71,8 +87,8 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
     onClose();
   };
 
-  // Generate suggested S3 path from filename
-  const suggestedS3Path = `s3://my-bucket/${defaultFilename}`;
+  // Generate suggested S3 path (bucket/path, without filename - filename will be appended if not provided)
+  const suggestedS3Path = `s3://my-bucket/path/to/folder/`;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => {
@@ -139,7 +155,8 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
                 onChange={(e) => setS3Path(e.target.value)}
               />
               <p className="text-sm text-muted-foreground">
-                Enter the S3 path where the file will be saved (e.g., s3://bucket-name/path/to/file.{fileExtension})
+                Enter the S3 bucket path (e.g., s3://bucket-name/path/to/folder). 
+                {defaultFilename && ` File will be saved as "${defaultFilename}.${fileExtension}" if no filename is specified.`}
               </p>
             </div>
           )}
