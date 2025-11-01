@@ -34,5 +34,11 @@ echo "Cleanup complete. Installing dependencies..."
 # Install dependencies
 npm install
 
+# Install terser for production minification (optional, but recommended)
+echo "Installing terser for production minification..."
+npm install --save-dev terser || {
+    echo "Warning: Failed to install terser. Using esbuild minification instead."
+}
+
 echo "Installation complete!"
 

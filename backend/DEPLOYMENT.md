@@ -190,6 +190,15 @@ VITE_API_BASE_URL=/api npm run build
 # Or if API is on a different domain:
 # VITE_API_BASE_URL=http://your-api-domain.com/api npm run build
 
+# If you get "terser not found" error:
+# Option 1: Install terser (better compression)
+# npm install --save-dev terser
+
+# Option 2: Use esbuild (already configured, faster)
+# The vite.config.ts is configured to use esbuild by default
+# Just run build without terser:
+# VITE_API_BASE_URL=/api npm run build
+
 # Build output will be in dist/
 ```
 
@@ -335,7 +344,25 @@ sudo systemctl start decision-tree-api
 - Check port availability: `sudo netstat -tulpn | grep 5000`
 - Make sure virtual environment is activated: `source venv/bin/activate`
 
-### Frontend npm install errors
+### Frontend build errors
+
+#### Terser not found error
+
+If you get `terser not found` during build:
+
+```bash
+cd frontend/tree-forge-ui
+
+# Option 1: Install terser (better compression)
+npm install --save-dev terser
+npm run build
+
+# Option 2: Use esbuild (already configured, faster, no install needed)
+# The vite.config.ts is configured to use esbuild by default
+VITE_API_BASE_URL=/api npm run build
+```
+
+#### Frontend npm install errors
 
 If you get `ENOTEMPTY` or other npm errors:
 
