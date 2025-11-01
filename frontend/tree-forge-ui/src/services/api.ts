@@ -3,6 +3,9 @@
 // Use environment variable at build time, fallback to relative path
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+// Import authService to get/clear tokens
+import { authService } from './authService';
+
 export interface UploadResponse {
   rows: number;
   columns: number;
@@ -16,7 +19,17 @@ export interface ApiError {
 }
 
 class ApiService {
-  private async makeRequest<T>(
+  // Helper methods to get and clear auth token
+  private getAuthToken(): string | null {
+    return authService.getToken();
+  }
+
+  private clearAuth(): void {
+    authService.logout();
+  }
+
+  // Make makeRequest public so authService can use it
+  async makeRequest<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
