@@ -67,7 +67,7 @@ sudo cp nginx.conf.example /etc/nginx/sites-available/decision-tree
 # 2. Edit configuration with your paths
 sudo nano /etc/nginx/sites-available/decision-tree
 # Update:
-#   - root path: /opt/decision-tree-app/frontend/tree-forge-ui/dist
+#   - root path: /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist
 #   - server_name: your-domain.com or EC2 IP
 
 # 3. Remove existing link if it exists

@@ -28,10 +28,10 @@ sudo apt install -y nginx
 
 ```bash
 # Clone repository or copy files to EC2
-cd /opt  # or your preferred directory
-sudo mkdir -p decision-tree-app
-sudo chown $USER:$USER decision-tree-app
-cd decision-tree-app
+# Default location: /home/ubuntu/project_iDT_2
+# Or create your project directory:
+mkdir -p ~/project_iDT_2
+cd ~/project_iDT_2
 
 # Copy backend files to backend/
 # Copy frontend files to frontend/
@@ -75,9 +75,10 @@ After=network.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/decision-tree-app/backend
-Environment="PATH=/opt/decision-tree-app/backend/venv/bin"
-ExecStart=/opt/decision-tree-app/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:5000 wsgi:app
+WorkingDirectory=/home/ubuntu/project_iDT_2/backend
+Environment="PATH=/home/ubuntu/project_iDT_2/backend/venv/bin"
+EnvironmentFile=/home/ubuntu/project_iDT_2/backend/.env
+ExecStart=/home/ubuntu/project_iDT_2/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:${PORT:-5000} wsgi:app
 Restart=always
 RestartSec=10
 
@@ -111,7 +112,7 @@ server {
 
     # Frontend static files
     location / {
-        root /opt/decision-tree-app/frontend/tree-forge-ui/dist;
+        root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;
         try_files $uri $uri/ /index.html;
     }
 
@@ -207,7 +208,7 @@ VITE_API_BASE_URL=/api npm run build
 ```bash
 # If building on EC2, the files are already there
 # If building locally, copy dist/ to EC2:
-# scp -r dist/ user@ec2-ip:/opt/decision-tree-app/frontend/tree-forge-ui/
+# scp -r dist/ user@ec2-ip:/home/ubuntu/project_iDT_2/frontend/tree-forge-ui/
 ```
 
 ## Environment Variables
@@ -428,7 +429,23 @@ Common issues:
    - Check AWS Console → EC2 → Security Groups
    - Allow inbound HTTP (port 80) from 0.0.0.0/0
 
-5. **Check nginx logs:**
+5. **Nginx 500 error:**
+   ```bash
+   # Check error logs for specific issue
+   sudo tail -20 /var/log/nginx/error.log
+   
+   # Run fix script
+   cd backend
+   chmod +x fix_nginx_500.sh
+   ./fix_nginx_500.sh
+   
+   # Common fixes:
+   # 1. Wrong root path - update nginx config
+   # 2. Permission issues - fix with: sudo chmod -R 755 /path/to/dist
+   # 3. Frontend not built - rebuild frontend
+   ```
+
+6. **Check nginx logs:**
    ```bash
    sudo tail -f /var/log/nginx/error.log
    sudo tail -f /var/log/nginx/access.log

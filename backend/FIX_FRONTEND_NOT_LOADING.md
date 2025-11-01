@@ -4,12 +4,99 @@ If you can't access the React app via EC2 public IP, check the following:
 
 ## Quick Diagnostic
 
-Run the verification script:
+Run the verification scripts:
 
 ```bash
 cd ~/project_iDT_2/backend
+
+# Fix nginx 500 error (most comprehensive)
+chmod +x fix_nginx_500.sh
+./fix_nginx_500.sh
+
+# Full verification
 chmod +x verify_deployment.sh
 ./verify_deployment.sh
+
+# Quick frontend check
+chmod +x check_frontend.sh
+./check_frontend.sh
+```
+
+## Nginx 500 Error
+
+If you're getting a 500 error:
+
+**Step 1: Check error logs**
+```bash
+sudo tail -20 /var/log/nginx/error.log
+```
+
+**Common causes and fixes:**
+
+### 1. Wrong Root Path in Nginx Config
+
+**Check:**
+```bash
+# Check what root path is in config
+sudo cat /etc/nginx/sites-available/decision-tree | grep root
+
+# Check if that path exists
+ls -la /path/from/nginx/config
+```
+
+**Fix:**
+```bash
+# Edit nginx config
+sudo nano /etc/nginx/sites-available/decision-tree
+
+# Update root line to match your installation:
+root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;
+
+# Test and reload
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 2. Permission Issues
+
+**Check:**
+```bash
+# Check permissions
+ls -ld ~/project_iDT_2/frontend/tree-forge-ui/dist
+
+# Check if nginx user can read
+sudo -u www-data test -r ~/project_iDT_2/frontend/tree-forge-ui/dist
+```
+
+**Fix:**
+```bash
+# Fix permissions
+sudo chmod -R 755 ~/project_iDT_2/frontend/tree-forge-ui/dist
+
+# Or change ownership (alternative)
+sudo chown -R www-data:www-data ~/project_iDT_2/frontend/tree-forge-ui/dist
+```
+
+### 3. Frontend Not Built
+
+**Check:**
+```bash
+ls -la ~/project_iDT_2/frontend/tree-forge-ui/dist/index.html
+```
+
+**Fix:**
+```bash
+cd ~/project_iDT_2/frontend/tree-forge-ui
+VITE_API_BASE_URL=/api npm run build
+```
+
+### 4. Quick Fix Script
+
+Run the automated fix script:
+```bash
+cd ~/project_iDT_2/backend
+chmod +x fix_nginx_500.sh
+./fix_nginx_500.sh
 ```
 
 ## Common Issues and Fixes

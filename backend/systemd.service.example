@@ -5,21 +5,21 @@ After=network.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/decision-tree-app/backend
-Environment="PATH=/opt/decision-tree-app/backend/venv/bin"
-EnvironmentFile=/opt/decision-tree-app/backend/.env
+WorkingDirectory=/home/ubuntu/project_iDT_2/backend
+Environment="PATH=/home/ubuntu/project_iDT_2/backend/venv/bin"
+EnvironmentFile=/home/ubuntu/project_iDT_2/backend/.env
 
 # Pre-start: Ensure port is free
 ExecStartPre=/bin/bash -c 'if command -v lsof &> /dev/null; then PIDS=$(sudo lsof -ti:%i 2>/dev/null || echo ""); if [ ! -z "$PIDS" ]; then sudo kill -9 $PIDS 2>/dev/null || true; sleep 1; fi; fi'
 
 # Use the stop script to clean up before starting
-ExecStartPre=/bin/bash /opt/decision-tree-app/backend/stop.sh || true
+ExecStartPre=/bin/bash /home/ubuntu/project_iDT_2/backend/stop.sh || true
 
 # Wait a moment after cleanup
 ExecStartPre=/bin/sleep 2
 
 # Start the service
-ExecStart=/opt/decision-tree-app/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:${PORT:-5000} wsgi:app
+ExecStart=/home/ubuntu/project_iDT_2/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:${PORT:-5000} wsgi:app
 
 # Stop gracefully
 ExecStop=/bin/kill -s TERM $MAINPID

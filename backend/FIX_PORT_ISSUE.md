@@ -43,7 +43,7 @@ sudo cp systemd.service.example /etc/systemd/system/decision-tree-api.service
 
 # Edit the file to set correct paths
 sudo nano /etc/systemd/system/decision-tree-api.service
-# Update paths: /opt/decision-tree-app/backend -> ~/project_iDT_2/backend
+# Update paths: Ensure all paths point to /home/ubuntu/project_iDT_2/backend
 
 # Reload and restart
 sudo systemctl daemon-reload
