@@ -59,7 +59,7 @@ const TreeVisualization = () => {
     maxBranches: "5",
     criteria: "entropy",
     uniqueVar: "0",
-    monotonousSplits: "0"
+    monotonicSplits: "0"
   });
   const [nodeMaster, setNodeMaster] = useState<NodeMasterData[]>([]);
   const [isLoading, setIsLoading] = useState(true);

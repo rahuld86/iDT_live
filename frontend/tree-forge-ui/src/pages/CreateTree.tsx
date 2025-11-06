@@ -35,7 +35,7 @@ const CreateTree = () => {
     maxBranches: "5",
     criteria: "entropy",
     uniqueVar: "0",
-    monotonousSplits: "0"
+    monotonicSplits: "0"
   });
 
   // Set initial step based on URL parameter
@@ -316,7 +316,7 @@ const CreateTree = () => {
         max_branches: safeParseInt(treeAttributes.maxBranches, 5),
         criteria: treeAttributes.criteria,
         unique_var: safeParseInt(treeAttributes.uniqueVar, 0),
-        monotonous: safeParseInt(treeAttributes.monotonousSplits, 0)
+        monotonic: safeParseInt(treeAttributes.monotonicSplits, 0)
       };
       
       console.log('Sending hyperparameters to API:', hyperparameters);
@@ -360,7 +360,7 @@ const CreateTree = () => {
         max_branches: safeParseInt(treeAttributes.maxBranches, 5),
         criteria: treeAttributes.criteria,
         unique_var: safeParseInt(treeAttributes.uniqueVar, 0),
-        monotonous: safeParseInt(treeAttributes.monotonousSplits, 0)
+        monotonic: safeParseInt(treeAttributes.monotonicSplits, 0)
       };
       
       console.log('Sending hyperparameters to API:', hyperparameters);

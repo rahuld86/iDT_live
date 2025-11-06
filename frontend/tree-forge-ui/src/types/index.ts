@@ -25,7 +25,7 @@ export interface TreeAttributes {
   maxBranches: string;
   criteria: string;
   uniqueVar: string;
-  monotonousSplits: string;
+  monotonicSplits: string;
 }
 
 export interface DataPreviewData {
@@ -69,6 +69,6 @@ export type CriteriaType = "entropy" | "gini";
 
 export type UniqueVarType = "0" | "1";
 
-export type MonotonousSplitsType = "0" | "1";
+export type MonotonicSplitsType = "0" | "1";
 
 export type RegressionFlagType = 0 | 1; // 0 = Binary Classification, 1 = Regression

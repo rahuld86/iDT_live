@@ -197,7 +197,7 @@ class TreeState:
         self.max_branches = 5
         self.criteria = "entropy"
         self.unique_var = 0
-        self.monotonous = 0
+        self.monotonic = 0
         self.regression_flag = 0
 
 # Initialize global state
@@ -527,7 +527,7 @@ def importTree():
         tree_state.max_branches = data.get("max_branches", 5)
         tree_state.criteria = data.get("criteria", "entropy")
         tree_state.unique_var = data.get("unique_var", 0)
-        tree_state.monotonous = data.get("monotonous", 0)
+        tree_state.monotonic = data.get("monotonic", 0)
         tree_state.df_col = pd.DataFrame(data.get("mapper"))
         node_master_read = pd.DataFrame(data.get("node_master"))
         
@@ -793,7 +793,7 @@ def getImportDiagnostics():
                 'max_branches': tree_state.max_branches,
                 'criteria': tree_state.criteria,
                 'unique_var': tree_state.unique_var,
-                'monotonous': tree_state.monotonous,
+                'monotonic': tree_state.monotonic,
                 'regression_flag': tree_state.regression_flag
             },
             'feature_columns': list(tree_state.X_col) if tree_state.X_col is not None else [],
@@ -1069,7 +1069,7 @@ def defineHP():
         tree_state.max_branches = 5
         tree_state.criteria = "entropy"
         tree_state.unique_var = 0
-        tree_state.monotonous = 0
+        tree_state.monotonic = 0
         
         # Override with provided values
         data = request.get_json(silent=True) or {}
@@ -1079,7 +1079,7 @@ def defineHP():
         tree_state.max_branches = data.get("max_branches", tree_state.max_branches)
         tree_state.criteria = data.get("criteria", tree_state.criteria)
         tree_state.unique_var = data.get("unique_var", tree_state.unique_var)
-        tree_state.monotonous = data.get("monotonous", tree_state.monotonous)
+        tree_state.monotonic = data.get("monotonic", tree_state.monotonic)
         
         return jsonify({
             'max_depth': tree_state.max_depth,
@@ -1088,7 +1088,7 @@ def defineHP():
             'max_branches': tree_state.max_branches,
             'criteria': tree_state.criteria,
             'unique_var': tree_state.unique_var,
-            'monotonous': tree_state.monotonous
+            'monotonic': tree_state.monotonic
         })
     
     except Exception as e:
@@ -1123,7 +1123,8 @@ def autoTree():
         tree_state.node_master, tree_state.node_datasets = build_tree(
             tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
             tree_state.min_node_split, tree_state.min_leaf_size, 
-            tree_state.max_branches, tree_state.df_col, tree_state.regression_flag
+            tree_state.max_branches, tree_state.df_col, tree_state.regression_flag,
+            tree_state.monotonic, tree_state.unique_var
         )
         
         return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
@@ -1254,7 +1255,8 @@ def findSplit():
         tree_state.node_master, tree_state.node_datasets = split_node(
             node_number, tree_state.min_leaf_size, tree_state.max_branches, 
             tree_state.max_depth, tree_state.min_node_split, tree_state.X_col, 
-            tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col, tree_state.regression_flag
+            tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col, tree_state.regression_flag,
+            tree_state.monotonic, []
         )
         
         return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
@@ -1571,7 +1573,7 @@ def exportTree():
                     'max_branches': tree_state.max_branches,
                     'criteria': tree_state.criteria,
                     'unique_var': tree_state.unique_var,
-                    'monotonous': tree_state.monotonous,
+                    'monotonic': tree_state.monotonic,
                     'mapper': df_to_json_safe(tree_state.df_col),
                     'node_master': df_to_json_safe(tree_state.node_master)
                 }
@@ -1601,7 +1603,7 @@ def exportTree():
             'max_branches': tree_state.max_branches,
             'criteria': tree_state.criteria,
             'unique_var': tree_state.unique_var,
-            'monotonous': tree_state.monotonous,
+            'monotonic': tree_state.monotonic,
             'mapper': df_to_json_safe(tree_state.df_col),
             'node_master': df_to_json_safe(tree_state.node_master)
         })
@@ -1635,7 +1637,7 @@ def downloadTree():
             'max_branches': tree_state.max_branches,
             'criteria': tree_state.criteria,
             'unique_var': tree_state.unique_var,
-            'monotonous': tree_state.monotonous,
+            'monotonic': tree_state.monotonic,
             'mapper': df_to_json_safe(tree_state.df_col),
             'node_master': df_to_json_safe(tree_state.node_master)
         }

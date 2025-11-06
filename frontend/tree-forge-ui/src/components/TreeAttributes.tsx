@@ -174,7 +174,7 @@ const TreeAttributes = ({ attributes, onAttributeChange, regressionFlag = 0 }: T
             
             <div className="space-y-2 md:col-span-2">
               <div className="flex items-center gap-2">
-                <Label htmlFor="monotonous-splits">Monotonous Splits</Label>
+                <Label htmlFor="monotonic-splits">Monotonic Splits</Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
@@ -184,7 +184,7 @@ const TreeAttributes = ({ attributes, onAttributeChange, regressionFlag = 0 }: T
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <Select value={attributes.monotonousSplits} onValueChange={(value) => onAttributeChange('monotonousSplits', value)}>
+              <Select value={attributes.monotonicSplits} onValueChange={(value) => onAttributeChange('monotonicSplits', value)}>
                 <SelectTrigger className="md:w-1/2">
                   <SelectValue />
                 </SelectTrigger>

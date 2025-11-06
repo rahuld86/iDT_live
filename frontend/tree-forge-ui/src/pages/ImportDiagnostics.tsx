@@ -32,7 +32,7 @@ interface ImportDiagnosticsData {
     max_branches: number;
     criteria: string;
     unique_var: number;
-    monotonous: number;
+    monotonic: number;
   };
   feature_columns: string[];
   df_for_tree_shape: [number, number] | null;
@@ -256,8 +256,8 @@ const ImportDiagnostics: React.FC = () => {
                   <div className="text-lg font-semibold">{diagnostics.hyperparameters.unique_var}</div>
                 </div>
                 <div className="text-center p-3 bg-gray-50 rounded">
-                  <div className="text-sm text-gray-600">Monotonous</div>
-                  <div className="text-lg font-semibold">{diagnostics.hyperparameters.monotonous}</div>
+                  <div className="text-sm text-gray-600">Monotonic</div>
+                  <div className="text-lg font-semibold">{diagnostics.hyperparameters.monotonic}</div>
                 </div>
               </div>
             </CardContent>

@@ -196,7 +196,7 @@ class ApiService {
     max_branches: number;
     criteria: string;
     unique_var: number;
-    monotonous: number;
+    monotonic: number;
   }): Promise<typeof params> {
     return this.makeRequest<typeof params>('/defineHP', {
       method: 'POST',
@@ -331,7 +331,7 @@ class ApiService {
     max_branches: string;
     criteria: string;
     unique_var: string;
-    monotonous: string;
+    monotonic: string;
     mapper: any;
     node_master: any;
   } | { message: string; s3_path: string }> {
@@ -350,7 +350,7 @@ class ApiService {
       max_branches: string;
       criteria: string;
       unique_var: string;
-      monotonous: string;
+      monotonic: string;
       mapper: any;
       node_master: any;
     }>('/downloadTree', {
@@ -406,7 +406,7 @@ class ApiService {
       max_branches: number;
       criteria: string;
       unique_var: number;
-      monotonous: number;
+      monotonic: number;
     };
     feature_columns: string[];
     df_for_tree_shape: [number, number] | null;
@@ -435,7 +435,7 @@ class ApiService {
         max_branches: number;
         criteria: string;
         unique_var: number;
-        monotonous: number;
+        monotonic: number;
       };
       feature_columns: string[];
       df_for_tree_shape: [number, number] | null;

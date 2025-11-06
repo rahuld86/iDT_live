@@ -61,7 +61,7 @@ const TreeAttributesDialog = ({
         max_branches: parseInt(attributes.maxBranches, 10),
         criteria: attributes.criteria,
         unique_var: parseInt(attributes.uniqueVar, 10),
-        monotonous: parseInt(attributes.monotonousSplits, 10)
+        monotonic: parseInt(attributes.monotonicSplits, 10)
       };
 
       await apiService.defineHyperparameters(apiParams);
@@ -250,7 +250,7 @@ const TreeAttributesDialog = ({
             
             <div className="space-y-2 md:col-span-2">
               <div className="flex items-center gap-2">
-                <Label htmlFor="monotonous-splits">Monotonous Splits</Label>
+                <Label htmlFor="monotonic-splits">Monotonic Splits</Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
@@ -260,7 +260,7 @@ const TreeAttributesDialog = ({
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <Select value={attributes.monotonousSplits} onValueChange={(value) => handleAttributeChange('monotonousSplits', value)}>
+              <Select value={attributes.monotonicSplits} onValueChange={(value) => handleAttributeChange('monotonicSplits', value)}>
                 <SelectTrigger className="md:w-1/2">
                   <SelectValue />
                 </SelectTrigger>
