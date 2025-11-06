@@ -446,7 +446,8 @@ FROM your_table;
       !nodesWithChildren.has(node.node_number) // No other node has this as parent
     );
 
-    // CSV headers
+    // CSV headers - use 'average' for regression, 'event_rate' for classification
+    const rateColumnName = regressionFlag === 1 ? 'average' : 'event_rate';
     const headers = [
       'node_number',
       'variable', 
@@ -456,7 +457,8 @@ FROM your_table;
       'node_rule',
       'missing',
       '# of records',
-      'event_rate'
+      rateColumnName,
+      'node_label'
     ];
 
     // Generate CSV content
@@ -473,7 +475,8 @@ FROM your_table;
         `"${node.node_rule || ''}"`,
         node.missing ? '1' : '0',
         node.count,
-        node.event_rate
+        node.event_rate,
+        `"${node.node_label || ''}"`
       ];
       csvContent += row.join(',') + '\n';
     });
