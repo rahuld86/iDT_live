@@ -1,0 +1,31 @@
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Dependencies and generated output
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Test caches and runtime files
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+*.log
+backend/df_store/
+backend/KeyError
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+.idea/

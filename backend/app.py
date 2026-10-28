@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, Response
+from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import pandas as pd
@@ -12,6 +13,24 @@ from util import (
     find_var, best_split, eval_split, add_nodes, copy_node_wrapper, 
     add_label, classify_dtype, create_node_datasets, find_var_regression, best_split_regression
 )
+from session import (
+    SessionState, SessionStore, LocalDiskDataFrameStore, DataFrameCache,
+    SessionManager, SessionDataExpired, SessionCleanup, start_cleanup_scheduler,
+    session_id_from_jwt
+)
+
+# Redis connection/timeout exceptions are used to map session-store
+# unavailability to HTTP 503. ``redis`` is a runtime dependency; import its
+# exception namespace defensively so the app still imports if it is somehow
+# missing (in which case the Redis-unreachable branch simply never matches).
+try:
+    from redis import exceptions as redis_exceptions
+    _REDIS_CONNECTION_ERRORS = (
+        redis_exceptions.ConnectionError,
+        redis_exceptions.TimeoutError,
+    )
+except Exception:  # pragma: no cover - redis is expected to be installed
+    _REDIS_CONNECTION_ERRORS = ()
 
 # S3 support
 try:
@@ -173,35 +192,61 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'change-this-secret-k
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 86400))  # 24 hours default
 jwt = JWTManager(app)
 
+# Raise the maximum request body size to ~600MB (MAX_UPLOAD_SIZE). Bodies above
+# this cap make Flask raise RequestEntityTooLarge, handled as HTTP 413 by the
+# @app.errorhandler(413) below (Requirements 8.1, 8.2).
+app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_SIZE', 629145600))
+
 # Import auth utilities
 from auth import verify_user
 
-# Global state management - better than scattered global variables
-class TreeState:
-    def __init__(self):
-        self.reset()
-    
-    def reset(self):
-        self.file_name = None
-        self.original_data_source = None  # Store original file path or URL
-        self.df = None
-        self.badflag = None
-        self.df_col = None
-        self.df_for_tree = None
-        self.node_master = None
-        self.node_datasets = None
-        self.X_col = None
-        self.max_depth = 5
-        self.min_node_split = 500
-        self.min_leaf_size = 100
-        self.max_branches = 5
-        self.criteria = "entropy"
-        self.unique_var = 0
-        self.monotonic = 0
-        self.regression_flag = 0
 
-# Initialize global state
-tree_state = TreeState()
+def _build_session_manager():
+    """Build the session infrastructure from environment configuration.
+
+    Returns a tuple ``(session_manager, session_store, df_store)`` so callers can
+    also construct a :class:`SessionCleanup` over the same store instances.
+
+    The DataFrame backend is selected by ``DF_STORE_BACKEND`` (default ``disk``):
+      - ``disk`` -> :class:`LocalDiskDataFrameStore` (``DF_STORE_DIR`` env driven)
+      - ``s3``   -> not yet implemented; the S3 backend is a Phase-2 feature.
+
+    Note: building ``SessionStore()`` only creates a lazy Redis client; it does
+    not open a connection here, so this is safe to call at module import even
+    when Redis is not running.
+    """
+    session_store = SessionStore()
+
+    backend = os.getenv('DF_STORE_BACKEND', 'disk').strip().lower()
+    if backend == 's3':
+        raise NotImplementedError(
+            "DF_STORE_BACKEND='s3' is a Phase-2 feature and is not implemented yet. "
+            "Use DF_STORE_BACKEND='disk' (the default)."
+        )
+    # Default / 'disk' backend.
+    df_store = LocalDiskDataFrameStore()
+
+    cache = DataFrameCache()
+    manager = SessionManager(session_store, df_store, cache)
+    return manager, session_store, df_store
+
+
+# Instantiate the session infrastructure at module import. Redis connects lazily,
+# so this does not force a connection even when Redis is unavailable.
+session_manager, session_store, df_store = _build_session_manager()
+session_cleanup = SessionCleanup(session_store, df_store)
+
+# Start the background cleanup scheduler once per process. Guard against multiple
+# starts under the Flask reloader / repeated imports. Registering the job does not
+# force a Redis connection (the sweep runs later on its interval).
+cleanup_scheduler = None
+if not globals().get('_cleanup_scheduler_started'):
+    try:
+        cleanup_scheduler = start_cleanup_scheduler(session_cleanup)
+        _cleanup_scheduler_started = True
+    except Exception as _sched_err:  # noqa: BLE001 - never block import on scheduler
+        print(f"Warning: could not start session cleanup scheduler: {_sched_err}")
+
 
 def validate_required_fields(data, required_fields):
     """Validate that required fields are present in request data"""
@@ -223,6 +268,61 @@ def handle_error(error_msg, status_code=500):
     print(f"Error: {error_msg}")
     print(traceback.format_exc())
     return jsonify({"error": error_msg}), status_code
+
+
+def handle_storage_error(e):
+    """Classify a session/storage exception into the right HTTP response.
+
+    Centralizes the error-handling contract for the ``resolve -> use state ->
+    persist`` lifecycle so every migrated endpoint can funnel its generic
+    ``except Exception`` through a single place (Requirement 11):
+
+    * Redis unreachable (``redis.exceptions.ConnectionError`` /
+      ``TimeoutError``) -> HTTP 503 "Session store unavailable".
+    * A session referencing a DataFrame key whose file no longer exists
+      (surfaced as :class:`SessionDataExpired`, or a bare ``KeyError`` from the
+      store) -> HTTP 400 "Session data expired, please re-upload". When a
+      :class:`SessionDataExpired` carries the (already key-cleared) session, the
+      stale pointer has been dropped on the in-memory state by the manager.
+    * A parquet read/write / other storage IO failure (``OSError`` and
+      friends) -> HTTP 500 including the underlying storage error context.
+    * Anything else -> HTTP 500 with the error message (unchanged default).
+
+    A Werkzeug ``HTTPException`` (e.g. ``RequestEntityTooLarge`` -> 413, raised
+    when ``MAX_CONTENT_LENGTH`` is exceeded while an endpoint touches
+    ``request.files``/``request.form``) is re-raised so Flask's registered
+    error handlers produce the correct response (the broad ``except Exception``
+    in endpoints must not swallow it into a generic 500).
+    """
+    # Let Flask's own error handlers deal with HTTP exceptions (e.g. 413).
+    if isinstance(e, HTTPException):
+        raise e
+
+    # Redis unreachable -> 503.
+    if _REDIS_CONNECTION_ERRORS and isinstance(e, _REDIS_CONNECTION_ERRORS):
+        return handle_error("Session store unavailable", 503)
+
+    # Missing DataFrame key -> 400 (expired session data).
+    if isinstance(e, (SessionDataExpired, KeyError)):
+        return handle_error("Session data expired, please re-upload", 400)
+
+    # Parquet / filesystem IO failure -> 500 with storage context.
+    if isinstance(e, (OSError, IOError)):
+        return handle_error(f"Storage error: {e}", 500)
+
+    # Fall back to the prior generic 500 behavior.
+    return handle_error(str(e), 500)
+
+
+@app.errorhandler(413)
+def handle_payload_too_large(error):
+    """Return a JSON body for oversized uploads (HTTP 413).
+
+    Flask raises ``werkzeug.exceptions.RequestEntityTooLarge`` (413)
+    automatically once ``MAX_CONTENT_LENGTH`` is exceeded (configured in task
+    17.2). This handler formats that as a JSON error so the response contract is
+    defined now (Requirement 8.2)."""
+    return jsonify({"error": "Payload Too Large"}), 413
 
 @app.route('/api/test', methods=['GET'])
 def test():
@@ -261,7 +361,10 @@ def login():
 @app.route('/api/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    """Logout endpoint - returns success message (JWT is stateless)"""
+    """Logout endpoint - purges the user's session + heavy DataFrame files, then
+    returns the existing success message. The JWT itself remains stateless."""
+    sid = session_id_from_jwt()
+    session_manager.purge(sid)
     return jsonify({"message": "Logout successful"})
 
 @app.route('/api/user', methods=['GET'])
@@ -283,6 +386,8 @@ def verify_token():
 def importTree():
     """Import an existing decision tree from JSON file"""
     try:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
         print("=== IMPORT TREE ENDPOINT CALLED ===")
         print(f"Request content type: {request.content_type}")
         print(f"Request files: {list(request.files.keys())}")
@@ -317,15 +422,17 @@ def importTree():
                 # Save the file
                 file.save(file_path)
                 
-                # Load CSV file
-                tree_state.df = pd.read_csv(file_path)
-                tree_state.file_name = file_path
-                tree_state.original_data_source = file_path  # Store full path to saved file
+                # Load CSV file, persist the heavy frame via the DataFrameStore.
+                df = pd.read_csv(file_path)
+                state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+                state.file_name = file_path
+                state.original_data_source = file_path  # Store full path to saved file
+                session_manager.persist(sid, state)
                 
                 # Return the same response as upload endpoint
-                rows, columns = tree_state.df.shape
-                sample = tree_state.df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
-                column_names = tree_state.df.columns.tolist()
+                rows, columns = df.shape
+                sample = df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
+                column_names = df.columns.tolist()
                 
                 return jsonify({
                     "rows": rows,
@@ -378,9 +485,10 @@ def importTree():
                         download_from_s3(file_name, file_path)
                         
                         # Load CSV file
-                        tree_state.df = pd.read_csv(file_path)
-                        tree_state.file_name = file_path
-                        tree_state.original_data_source = file_name  # Store original S3 path
+                        df = pd.read_csv(file_path)
+                        state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+                        state.file_name = file_path
+                        state.original_data_source = file_name  # Store original S3 path
                         
                     except Exception as e:
                         return handle_error(f"Failed to download file from S3: {str(e)}", 400)
@@ -408,9 +516,10 @@ def importTree():
                             f.write(response.content)
                         
                         # Load CSV file
-                        tree_state.df = pd.read_csv(file_path)
-                        tree_state.file_name = file_path
-                        tree_state.original_data_source = file_name  # Store original URL
+                        df = pd.read_csv(file_path)
+                        state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+                        state.file_name = file_path
+                        state.original_data_source = file_name  # Store original URL
                         
                     except requests.RequestException as e:
                         return handle_error(f"Failed to download file from URL: {str(e)}", 400)
@@ -428,14 +537,16 @@ def importTree():
                         os.path.join(os.getcwd(), os.path.basename(file_name))  # Try filename in current directory
                     ]
                     
+                    df = None
                     file_loaded = False
                     for file_path in file_paths_to_try:
                         print(f"Trying file path: {file_path}")
                         if os.path.exists(file_path):
-                            tree_state.df = pd.read_csv(file_path)
-                            tree_state.file_name = file_path
-                            tree_state.original_data_source = file_name  # Store original file path
-                            print(f"Successfully loaded CSV with shape: {tree_state.df.shape}")
+                            df = pd.read_csv(file_path)
+                            state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+                            state.file_name = file_path
+                            state.original_data_source = file_name  # Store original file path
+                            print(f"Successfully loaded CSV with shape: {df.shape}")
                             file_loaded = True
                             break
                     
@@ -444,9 +555,10 @@ def importTree():
                         return handle_error(f"File not found in any attempted paths: {file_paths_to_try}", 404)
                 
                 # Return the same response as upload endpoint
-                rows, columns = tree_state.df.shape
-                sample = tree_state.df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
-                column_names = tree_state.df.columns.tolist()
+                session_manager.persist(sid, state)
+                rows, columns = df.shape
+                sample = df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
+                column_names = df.columns.tolist()
                 
                 return jsonify({
                     "rows": rows,
@@ -519,23 +631,29 @@ def importTree():
                         data = json.load(f)
         
         # Load tree configuration
-        tree_state.file_name = data.get("file_name")
-        tree_state.badflag = data.get("badflag")
-        tree_state.max_depth = data.get("max_depth", 5)
-        tree_state.min_node_split = data.get("min_node_split", 500)
-        tree_state.min_leaf_size = data.get("min_leaf_size", 100)
-        tree_state.max_branches = data.get("max_branches", 5)
-        tree_state.criteria = data.get("criteria", "entropy")
-        tree_state.unique_var = data.get("unique_var", 0)
-        tree_state.monotonic = data.get("monotonic", 0)
-        tree_state.df_col = pd.DataFrame(data.get("mapper"))
+        state.file_name = data.get("file_name")
+        state.badflag = data.get("badflag")
+        state.max_depth = data.get("max_depth", 5)
+        state.min_node_split = data.get("min_node_split", 500)
+        state.min_leaf_size = data.get("min_leaf_size", 100)
+        state.max_branches = data.get("max_branches", 5)
+        state.criteria = data.get("criteria", "entropy")
+        state.unique_var = data.get("unique_var", 0)
+        state.monotonic = data.get("monotonic", 0)
+        # Keep a local DataFrame for the mapper (``df_col_df``) for the logic
+        # below that uses ``.isin(...)`` / ``.column_name``; persist as JSON.
+        df_col_df = pd.DataFrame(data.get("mapper"))
+        state.df_col = df_to_json_safe(df_col_df)
         node_master_read = pd.DataFrame(data.get("node_master"))
         
+        # The loaded heavy data frame for this import; persisted via set_dataframe.
+        df = None
+        
         # Load and process data
-        print(f"Loading data from file: {tree_state.file_name}")
+        print(f"Loading data from file: {state.file_name}")
         
         # Try to load the original data source if it exists
-        original_file_name = tree_state.file_name
+        original_file_name = state.file_name
         print(f"Attempting to load original data from: {original_file_name}")
         
         # Check if the file_name in JSON points to a CSV file
@@ -559,7 +677,7 @@ def importTree():
                         download_from_s3(original_file_name, file_path)
                         
                         # Load CSV file
-                        tree_state.df = pd.read_csv(file_path)
+                        df = pd.read_csv(file_path)
                         print(f"Successfully loaded data from S3: {original_file_name}")
                         
                     except Exception as e:
@@ -589,7 +707,7 @@ def importTree():
                             f.write(response.content)
                         
                         # Load CSV file
-                        tree_state.df = pd.read_csv(file_path)
+                        df = pd.read_csv(file_path)
                         print(f"Successfully loaded data from URL: {original_file_name}")
                         
                     except requests.RequestException as e:
@@ -613,7 +731,7 @@ def importTree():
                     for file_path in file_paths_to_try:
                         print(f"Trying file path: {file_path}")
                         if os.path.exists(file_path):
-                            tree_state.df = pd.read_csv(file_path)
+                            df = pd.read_csv(file_path)
                             print(f"Successfully loaded data from local file: {file_path}")
                             file_loaded = True
                             break
@@ -627,7 +745,7 @@ def importTree():
                 print("Creating mock dataset based on column mapping to avoid file dependency issues...")
                 
                 # Create a mock dataset based on the column mapping
-                df_col_small = tree_state.df_col[tree_state.df_col['datatype'].isin(['numerical', 'categorical'])]
+                df_col_small = df_col_df[df_col_df['datatype'].isin(['numerical', 'categorical'])]
                 mock_data = {}
                 
                 for _, row in df_col_small.iterrows():
@@ -638,12 +756,12 @@ def importTree():
                         mock_data[col_name] = ['category1'] * 100  # Create 100 rows of category1
                 
                 # Add the target variable
-                if tree_state.badflag not in mock_data:
-                    mock_data[tree_state.badflag] = [0] * 100  # Create 100 rows of zeros
+                if state.badflag not in mock_data:
+                    mock_data[state.badflag] = [0] * 100  # Create 100 rows of zeros
                 
-                tree_state.df = pd.DataFrame(mock_data)
-                print(f"Created mock dataset with shape: {tree_state.df.shape}")
-                print(f"Mock data columns: {list(tree_state.df.columns)}")
+                df = pd.DataFrame(mock_data)
+                print(f"Created mock dataset with shape: {df.shape}")
+                print(f"Mock data columns: {list(df.columns)}")
         else:
             # Original logic for non-CSV files - skip data loading for now
             print("Non-CSV file detected - skipping data loading")
@@ -651,153 +769,155 @@ def importTree():
             pass
         
         # Verify all required columns exist
-        df_col_small = tree_state.df_col[tree_state.df_col['datatype'].isin(['numerical', 'categorical'])]
+        df_col_small = df_col_df[df_col_df['datatype'].isin(['numerical', 'categorical'])]
         print(f"Columns to use for tree: {list(df_col_small.column_name)}")
         
         # Check if all required columns exist
-        missing_cols = [col for col in df_col_small.column_name if col not in tree_state.df.columns]
+        missing_cols = [col for col in df_col_small.column_name if col not in df.columns]
         if missing_cols:
             print(f"Adding missing columns: {missing_cols}")
             for col in missing_cols:
-                tree_state.df[col] = [0.0] * 100  # Add missing columns
+                df[col] = [0.0] * 100  # Add missing columns
         
         # Check if badflag column exists
-        if tree_state.badflag not in tree_state.df.columns:
-            print(f"Adding missing badflag column: {tree_state.badflag}")
-            tree_state.df[tree_state.badflag] = [0] * 100
+        if state.badflag not in df.columns:
+            print(f"Adding missing badflag column: {state.badflag}")
+            df[state.badflag] = [0] * 100
         
-        tree_state.df_for_tree = tree_state.df[df_col_small.column_name]
-        tree_state.df_for_tree['badflag'] = tree_state.df[tree_state.badflag]
+        df_for_tree = df[df_col_small.column_name]
+        df_for_tree['badflag'] = df[state.badflag]
         
-        print(f"Final df_for_tree columns: {list(tree_state.df_for_tree.columns)}")
-        print(f"Final df_for_tree shape: {tree_state.df_for_tree.shape}")
+        print(f"Final df_for_tree columns: {list(df_for_tree.columns)}")
+        print(f"Final df_for_tree shape: {df_for_tree.shape}")
         
         # Check if variables in node_master exist in the dataset
         if 'variable' in node_master_read.columns:
             node_variables = node_master_read['variable'].dropna().unique()
-            missing_vars = [var for var in node_variables if var not in tree_state.df_for_tree.columns and var not in ['Parent', '']]
+            missing_vars = [var for var in node_variables if var not in df_for_tree.columns and var not in ['Parent', '']]
             if missing_vars:
-                return handle_error(f"Variables in tree not found in data: {missing_vars}. Available columns: {list(tree_state.df_for_tree.columns)}", 400)
+                return handle_error(f"Variables in tree not found in data: {missing_vars}. Available columns: {list(df_for_tree.columns)}", 400)
         
         print(f"About to call create_node_datasets...")
-        print(f"df_for_tree columns: {list(tree_state.df_for_tree.columns)}")
-        print(f"df_for_tree shape: {tree_state.df_for_tree.shape}")
+        print(f"df_for_tree columns: {list(df_for_tree.columns)}")
+        print(f"df_for_tree shape: {df_for_tree.shape}")
         print(f"node_master_read columns: {list(node_master_read.columns)}")
         print(f"node_master_read shape: {node_master_read.shape}")
         
-        # Properly initialize the tree state for imported trees
-        print("Initializing tree state for imported tree...")
-        tree_state.node_master = node_master_read
+        # Persist the heavy frames to the DataFrameStore (single load -> set_dataframe).
+        print("Initializing session state for imported tree...")
+        state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+        state.df_for_tree_key = session_manager.set_dataframe(sid, state, "df_for_tree", df_for_tree)
         
-        # Create proper node_datasets structure
-        # For imported trees, assign ALL data to the root node (node 1)
-        # This ensures that when we delete subtrees, the root node still has all the data
-        tree_state.node_datasets = tree_state.df_for_tree.copy()
-        tree_state.node_datasets['node_number'] = 1
-        
-        print("All data assigned to root node (node 1) for imported tree")
-        
-        print(f"Tree state initialized successfully")
-        print(f"node_master shape: {tree_state.node_master.shape}")
-        print(f"node_datasets shape: {tree_state.node_datasets.shape}")
-        print(f"node_datasets node_number distribution: {tree_state.node_datasets['node_number'].value_counts()}")
-        
-        print(f"create_node_datasets completed successfully")
+        # ``node_datasets`` is transient and rederived on demand via
+        # ``session_manager.node_datasets_for`` -- it is intentionally NOT
+        # persisted here. The persisted artifacts are node_master, df_col,
+        # df_for_tree_key, and X_col.
+        print("node_datasets will be rederived on demand (not persisted)")
         
         # Set X_col (feature columns excluding the target variable)
         print(f"Setting X_col...")
-        print(f"df_for_tree columns: {list(tree_state.df_for_tree.columns)}")
-        print(f"badflag: '{tree_state.badflag}'")
-        print(f"badflag in columns: {tree_state.badflag in tree_state.df_for_tree.columns}")
+        print(f"df_for_tree columns: {list(df_for_tree.columns)}")
+        print(f"badflag: '{state.badflag}'")
+        print(f"badflag in columns: {state.badflag in df_for_tree.columns}")
         
         # Always exclude the target variable from feature columns
         # Use the mapper to determine feature columns (exclude target variable)
-        df_col_small = tree_state.df_col[tree_state.df_col['datatype'].isin(['numerical', 'categorical'])]
+        df_col_small = df_col_df[df_col_df['datatype'].isin(['numerical', 'categorical'])]
         feature_columns = df_col_small['column_name'].tolist()
         
         print(f"Feature columns from mapper: {feature_columns}")
         
         # Ensure all feature columns exist in df_for_tree
-        available_features = [col for col in feature_columns if col in tree_state.df_for_tree.columns]
+        available_features = [col for col in feature_columns if col in df_for_tree.columns]
         print(f"Available feature columns: {available_features}")
         
         if available_features:
-            tree_state.X_col = available_features
-            print(f"X_col set from mapper features: {list(tree_state.X_col)}")
+            state.X_col = list(available_features)
+            print(f"X_col set from mapper features: {list(state.X_col)}")
         else:
             # Fallback: exclude target variable from all columns
-            if tree_state.badflag in tree_state.df_for_tree.columns:
-                tree_state.X_col = tree_state.df_for_tree.drop([tree_state.badflag], axis=1).columns
-                print(f"X_col set by dropping badflag: {list(tree_state.X_col)}")
+            if state.badflag in df_for_tree.columns:
+                state.X_col = list(df_for_tree.drop([state.badflag], axis=1).columns)
+                print(f"X_col set by dropping badflag: {list(state.X_col)}")
             else:
-                print(f"Warning: badflag '{tree_state.badflag}' not in df_for_tree columns, using all columns")
-                tree_state.X_col = tree_state.df_for_tree.columns
+                print(f"Warning: badflag '{state.badflag}' not in df_for_tree columns, using all columns")
+                state.X_col = list(df_for_tree.columns)
         
-        print(f"Final X_col: {list(tree_state.X_col)}")
-        print(f"X_col type: {type(tree_state.X_col)}")
+        print(f"Final X_col: {list(state.X_col)}")
         
-        print(f"About to call df_to_json_safe...")
-        print(f"node_master type: {type(tree_state.node_master)}")
-        print(f"node_master shape: {tree_state.node_master.shape if hasattr(tree_state.node_master, 'shape') else 'No shape'}")
+        # Persist node_master (as JSON) and the rest of the session state.
+        state.node_master = df_to_json_safe(node_master_read)
+        session_manager.persist(sid, state)
         
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+        return jsonify({"node_master": df_to_json_safe(node_master_read)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/getImportDiagnostics', methods=['GET'])
 @jwt_required()
 def getImportDiagnostics():
     """Get diagnostic information about the imported tree data"""
     try:
-        if tree_state.df is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.df_key is None:
+            return handle_error("No data available. Please import a tree first.", 400)
+
+        df = session_manager.active_df(state)
+        if df is None:
             return handle_error("No data available. Please import a tree first.", 400)
         
         # Get sample records (first 5 rows)
-        sample_records = tree_state.df.head(5).replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
+        sample_records = df.head(5).replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
         
         # Get column information
         columns_info = []
-        for col in tree_state.df.columns:
-            dtype = str(tree_state.df[col].dtype)
-            unique_count = tree_state.df[col].nunique()
+        for col in df.columns:
+            dtype = str(df[col].dtype)
+            unique_count = df[col].nunique()
             columns_info.append({
                 'column_name': col,
                 'datatype': dtype,
                 'unique_values': unique_count,
-                'sample_values': tree_state.df[col].head(3).replace({pd.NA: None, pd.NaT: None, np.nan: None}).tolist()
+                'sample_values': df[col].head(3).replace({pd.NA: None, pd.NaT: None, np.nan: None}).tolist()
             })
         
         # Get mapper information
         mapper_info = []
-        if tree_state.df_col is not None:
-            for _, row in tree_state.df_col.iterrows():
+        if state.df_col is not None:
+            for row in pd.DataFrame(state.df_col).to_dict('records'):
                 mapper_info.append({
                     'column_name': row['column_name'],
                     'datatype': row['datatype']
                 })
         
+        df_for_tree = (
+            session_manager.active_df_for_tree(state)
+            if state.df_for_tree_key else None
+        )
         diagnostics = {
             'dataset_info': {
-                'rows': tree_state.df.shape[0],
-                'columns': tree_state.df.shape[1],
+                'rows': df.shape[0],
+                'columns': df.shape[1],
                 'sample_records': sample_records
             },
-            'target_variable': tree_state.badflag,
+            'target_variable': state.badflag,
             'columns_info': columns_info,
             'mapper_info': mapper_info,
             'hyperparameters': {
-                'max_depth': tree_state.max_depth,
-                'min_node_split': tree_state.min_node_split,
-                'min_leaf_size': tree_state.min_leaf_size,
-                'max_branches': tree_state.max_branches,
-                'criteria': tree_state.criteria,
-                'unique_var': tree_state.unique_var,
-                'monotonic': tree_state.monotonic,
-                'regression_flag': tree_state.regression_flag
+                'max_depth': state.max_depth,
+                'min_node_split': state.min_node_split,
+                'min_leaf_size': state.min_leaf_size,
+                'max_branches': state.max_branches,
+                'criteria': state.criteria,
+                'unique_var': state.unique_var,
+                'monotonic': state.monotonic,
+                'regression_flag': state.regression_flag
             },
-            'feature_columns': list(tree_state.X_col) if tree_state.X_col is not None else [],
-            'df_for_tree_shape': tree_state.df_for_tree.shape if tree_state.df_for_tree is not None else None
+            'feature_columns': list(state.X_col) if state.X_col else [],
+            'df_for_tree_shape': df_for_tree.shape if df_for_tree is not None else None
         }
         
         return jsonify(diagnostics)
@@ -806,13 +926,21 @@ def getImportDiagnostics():
         print(f"Error in getImportDiagnostics: {str(e)}")
         import traceback
         print(f"Traceback: {traceback.format_exc()}")
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/upload', methods=['POST'])
 @jwt_required()
 def upload_csv():
     """Upload and validate CSV file"""
     try:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        # ``df`` / ``source`` capture the loaded frame and its original source so
+        # the heavy frame is persisted via the DataFrameStore (not the global).
+        df = None
+        source = None
+
         # Check if this is a file upload (multipart/form-data) or JSON request
         if request.files:
             # Handle file upload
@@ -839,9 +967,8 @@ def upload_csv():
             uploaded_file.save(file_path)
             
             # Load CSV file
-            tree_state.df = pd.read_csv(file_path)
-            tree_state.file_name = file_path
-            tree_state.original_data_source = file_path  # Store full path to saved file
+            df = pd.read_csv(file_path)
+            source = file_path  # Store full path to saved file
             
         else:
             # Handle JSON request (existing file path or URL)
@@ -873,9 +1000,8 @@ def upload_csv():
                     download_from_s3(file_name, file_path)
                     
                     # Load CSV file
-                    tree_state.df = pd.read_csv(file_path)
-                    tree_state.file_name = file_path
-                    tree_state.original_data_source = file_name  # Store original S3 path
+                    df = pd.read_csv(file_path)
+                    source = file_name  # Store original S3 path
                     
                 except Exception as e:
                     return handle_error(f"Failed to download file from S3: {str(e)}", 400)
@@ -903,9 +1029,8 @@ def upload_csv():
                         f.write(response.content)
                     
                     # Load CSV file
-                    tree_state.df = pd.read_csv(file_path)
-                    tree_state.file_name = file_path
-                    tree_state.original_data_source = file_name  # Store original URL
+                    df = pd.read_csv(file_path)
+                    source = file_name  # Store original URL
                     
                 except requests.RequestException as e:
                     return handle_error(f"Failed to download file from URL: {str(e)}", 400)
@@ -922,18 +1047,25 @@ def upload_csv():
                 file_loaded = False
                 for file_path in file_paths_to_try:
                     if os.path.exists(file_path):
-                        tree_state.df = pd.read_csv(file_path)
-                        tree_state.file_name = file_path
-                        tree_state.original_data_source = file_name  # Store original file path
+                        df = pd.read_csv(file_path)
+                        source = file_name  # Store original file path
                         file_loaded = True
                         break
                 
                 if not file_loaded:
                     return handle_error(f"File not found in any attempted paths: {file_paths_to_try}", 404)
-        
-        rows, columns = tree_state.df.shape
-        sample = tree_state.df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
-        column_names = tree_state.df.columns.tolist()
+
+        # Persist the heavy frame to the DataFrameStore; keep only the key +
+        # small metadata in the session. ``file_path`` is the local saved path
+        # in every branch above; ``source`` is the original upload source.
+        state.df_key = session_manager.set_dataframe(sid, state, "df", df)
+        state.file_name = file_path
+        state.original_data_source = source
+        session_manager.persist(sid, state)
+
+        rows, columns = df.shape
+        sample = df.head().replace({pd.NA: None, pd.NaT: None, np.nan: None}).to_dict(orient='records')
+        column_names = df.columns.tolist()
         
         return jsonify({
             'rows': rows,
@@ -943,7 +1075,7 @@ def upload_csv():
         })
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/setTarget', methods=['POST'])
 @jwt_required()
@@ -962,51 +1094,61 @@ def setTarget():
         target = data.get("target")
         regression_flag = data.get("regression_flag")
         
-        
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
         # Validate target exists in dataframe
-        if tree_state.df is None:
+        df = session_manager.active_df(state)
+        if df is None:
             return handle_error("No data loaded. Please upload a file first.", 400)
         
-        if target not in tree_state.df.columns:
+        if target not in df.columns:
             return handle_error(f"Target variable '{target}' not found in data", 400)
         
-        tree_state.badflag = target
-        tree_state.regression_flag = regression_flag
+        state.badflag = target
+        state.regression_flag = regression_flag
+        session_manager.persist(sid, state)
         
         return jsonify({"message": f"Target variable set to {target}"})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/getRegressionFlag', methods=['GET'])
 @jwt_required()
 def getRegressionFlag():
     """Return current regression/classification mode flag"""
     try:
-        return jsonify({"regression_flag": tree_state.regression_flag})
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+        return jsonify({"regression_flag": state.regression_flag})
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/getTypes', methods=['GET'])
 @jwt_required()
 def getTypes():
     """Get data types for all columns except target variable"""
     try:
-        if tree_state.df is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        df = session_manager.active_df(state)
+        if df is None:
             return handle_error("No data loaded. Please upload a file first.", 400)
         
-        if tree_state.badflag is None:
+        if state.badflag is None:
             return handle_error("No target variable set. Please set target variable first.", 400)
         
         col_types = {
-            col: classify_dtype(tree_state.df.drop(tree_state.badflag, axis=1)[col].dtype) 
-            for col in tree_state.df.drop(tree_state.badflag, axis=1).columns
+            col: classify_dtype(df.drop(state.badflag, axis=1)[col].dtype) 
+            for col in df.drop(state.badflag, axis=1).columns
         }
         
         return jsonify(col_types)
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/keepVar', methods=['POST'])
 @jwt_required()
@@ -1017,120 +1159,151 @@ def keepVar():
         if not data:
             return handle_error("No JSON data provided", 400)
         
-        if tree_state.df is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        df = session_manager.active_df(state)
+        if df is None:
             return handle_error("No data loaded. Please upload a file first.", 400)
         
-        if tree_state.badflag is None:
+        if state.badflag is None:
             return handle_error("No target variable set. Please set target variable first.", 400)
         
-        tree_state.df_col = pd.DataFrame(list(data.items()), columns=['column_name', 'datatype'])
-        print(f"df_col created: {tree_state.df_col}")
+        df_col = pd.DataFrame(list(data.items()), columns=['column_name', 'datatype'])
+        print(f"df_col created: {df_col}")
+        # Persist the mapper as JSON-serializable rows on the session.
+        state.df_col = df_col.to_dict('records')
         
-        df_col_small = tree_state.df_col[tree_state.df_col['datatype'].isin(['numerical', 'categorical'])]
+        df_col_small = df_col[df_col['datatype'].isin(['numerical', 'categorical'])]
         print(f"df_col_small after filtering: {df_col_small}")
         
         # Convert to list to ensure proper column selection
         feature_columns = df_col_small['column_name'].tolist()
         print(f"Feature columns to use: {feature_columns}")
         
-        tree_state.df_for_tree = tree_state.df[feature_columns]
-        print(f"df_for_tree columns after feature selection: {list(tree_state.df_for_tree.columns)}")
+        df_for_tree = df[feature_columns]
+        print(f"df_for_tree columns after feature selection: {list(df_for_tree.columns)}")
         
         # Convert target variable to numeric (0/1) for tree building
-        target_values = tree_state.df[tree_state.badflag]
+        target_values = df[state.badflag]
         if target_values.dtype == 'object':
             # Convert string values to numeric (Yes/No -> 1/0)
             unique_values = target_values.unique()
             if len(unique_values) == 2:
                 # Create mapping: first unique value -> 1, second -> 0
                 value_map = {unique_values[0]: 1, unique_values[1]: 0}
-                tree_state.df_for_tree['badflag'] = target_values.map(value_map)
+                df_for_tree['badflag'] = target_values.map(value_map)
             else:
                 return handle_error(f"Target variable must have exactly 2 unique values, found {len(unique_values)}", 400)
         else:
             # Already numeric
-            tree_state.df_for_tree['badflag'] = target_values
+            df_for_tree['badflag'] = target_values
         
-        column_names = tree_state.df_for_tree.columns.tolist()
+        # Persist the processed heavy frame to the DataFrameStore.
+        state.df_for_tree_key = session_manager.set_dataframe(sid, state, "df_for_tree", df_for_tree)
+        session_manager.persist(sid, state)
+        
+        column_names = df_for_tree.columns.tolist()
         return jsonify({'columnsList': column_names})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/defineHP', methods=['POST'])
 @jwt_required()
 def defineHP():
     """Define hyperparameters for decision tree"""
     try:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
         # Set default values
-        tree_state.max_depth = 5
-        tree_state.min_node_split = 500
-        tree_state.min_leaf_size = 100
-        tree_state.max_branches = 5
-        tree_state.criteria = "entropy"
-        tree_state.unique_var = 0
-        tree_state.monotonic = 0
+        state.max_depth = 5
+        state.min_node_split = 500
+        state.min_leaf_size = 100
+        state.max_branches = 5
+        state.criteria = "entropy"
+        state.unique_var = 0
+        state.monotonic = 0
         
         # Override with provided values
         data = request.get_json(silent=True) or {}
-        tree_state.max_depth = data.get("max_depth", tree_state.max_depth)
-        tree_state.min_node_split = data.get("min_node_split", tree_state.min_node_split)
-        tree_state.min_leaf_size = data.get("min_leaf_size", tree_state.min_leaf_size)
-        tree_state.max_branches = data.get("max_branches", tree_state.max_branches)
-        tree_state.criteria = data.get("criteria", tree_state.criteria)
-        tree_state.unique_var = data.get("unique_var", tree_state.unique_var)
-        tree_state.monotonic = data.get("monotonic", tree_state.monotonic)
+        state.max_depth = data.get("max_depth", state.max_depth)
+        state.min_node_split = data.get("min_node_split", state.min_node_split)
+        state.min_leaf_size = data.get("min_leaf_size", state.min_leaf_size)
+        state.max_branches = data.get("max_branches", state.max_branches)
+        state.criteria = data.get("criteria", state.criteria)
+        state.unique_var = data.get("unique_var", state.unique_var)
+        state.monotonic = data.get("monotonic", state.monotonic)
+        
+        session_manager.persist(sid, state)
         
         return jsonify({
-            'max_depth': tree_state.max_depth,
-            'min_node_split': tree_state.min_node_split,
-            'min_leaf_size': tree_state.min_leaf_size,
-            'max_branches': tree_state.max_branches,
-            'criteria': tree_state.criteria,
-            'unique_var': tree_state.unique_var,
-            'monotonic': tree_state.monotonic
+            'max_depth': state.max_depth,
+            'min_node_split': state.min_node_split,
+            'min_leaf_size': state.min_leaf_size,
+            'max_branches': state.max_branches,
+            'criteria': state.criteria,
+            'unique_var': state.unique_var,
+            'monotonic': state.monotonic
         })
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/initTree', methods=['POST'])
 @jwt_required()
 def initTree():
     """Initialize decision tree with root node"""
     try:
-        if tree_state.df_for_tree is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        df_for_tree = session_manager.active_df_for_tree(state)
+        if df_for_tree is None:
             return handle_error("No processed data available. Please complete data setup first.", 400)
-        
-        tree_state.X_col, tree_state.node_master, tree_state.node_datasets = init_setup(
-            tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
-            tree_state.min_node_split, tree_state.min_leaf_size, tree_state.max_branches
+
+        X_col, node_master, node_datasets = init_setup(
+            df_for_tree, 'badflag', state.max_depth,
+            state.min_node_split, state.min_leaf_size, state.max_branches
         )
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        # node_datasets is rederivable and intentionally not persisted.
+        state.X_col = list(X_col)
+        state.node_master = df_to_json_safe(node_master)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/autoTree', methods=['POST'])
 @jwt_required()
 def autoTree():
     """Train entire tree automatically"""
     try:
-        if tree_state.df_for_tree is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        df_for_tree = session_manager.active_df_for_tree(state)
+        if df_for_tree is None:
             return handle_error("No processed data available. Please complete data setup first.", 400)
-        
-        tree_state.node_master, tree_state.node_datasets = build_tree(
-            tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
-            tree_state.min_node_split, tree_state.min_leaf_size, 
-            tree_state.max_branches, tree_state.df_col, tree_state.regression_flag,
-            tree_state.monotonic, tree_state.unique_var
+
+        node_master, node_datasets = build_tree(
+            df_for_tree, 'badflag', state.max_depth,
+            state.min_node_split, state.min_leaf_size,
+            state.max_branches, pd.DataFrame(state.df_col), state.regression_flag,
+            state.monotonic, state.unique_var
         )
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        state.node_master = df_to_json_safe(node_master)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/delSubTree', methods=['POST'])
 @jwt_required()
@@ -1148,32 +1321,44 @@ def delSubTree():
         
         node_number = data.get("node_number")
         
-        if tree_state.node_master is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        tree_state.node_master, tree_state.node_datasets = del_subtree(
-            tree_state.node_master, tree_state.node_datasets, node_number
+
+        node_master_df = pd.DataFrame(state.node_master)
+        node_datasets = session_manager.node_datasets_for(state)
+
+        node_master_df, node_datasets = del_subtree(
+            node_master_df, node_datasets, node_number
         )
         
         # After deleting subtree, ensure the parent node is marked as a non-leaf node
         # This is crucial for auto training to work properly
-        if node_number in tree_state.node_master['node_number'].values:
+        if node_number in node_master_df['node_number'].values:
             print(f"Marking node {node_number} as non-leaf after deleting subtree")
-            tree_state.node_master.loc[tree_state.node_master['node_number'] == node_number, 'leaf_flag'] = 0
+            node_master_df.loc[node_master_df['node_number'] == node_number, 'leaf_flag'] = 0
             print(f"Node {node_number} leaf_flag set to 0")
         
         # After deleting subtree, ensure all remaining data is assigned to the root node
-        # This is crucial for auto training to work properly
+        # This is crucial for auto training to work properly.
+        # node_datasets is transient (never persisted); this reassignment only
+        # affects the in-request computation. The persisted leaf_flag mutation on
+        # node_master_df is what matters across requests.
         if node_number == 1:  # If deleting from root node
             print("Deleting subtree from root node - reassigning all data to root node")
-            tree_state.node_datasets = tree_state.df_for_tree.copy()
-            tree_state.node_datasets['node_number'] = 1
-            print(f"Reassigned all data to root node. node_datasets shape: {tree_state.node_datasets.shape}")
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+            node_datasets = session_manager.active_df_for_tree(state).copy()
+            node_datasets['node_number'] = 1
+            print(f"Reassigned all data to root node. node_datasets shape: {node_datasets.shape}")
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/autoTrainSubTree', methods=['POST'])
 @jwt_required()
@@ -1193,38 +1378,50 @@ def autoTrainSubTree():
         node_number = data.get("node_number")
         print(f"Processing auto train for node: {node_number}")
         
-        if tree_state.node_master is None or tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
+
+        node_master_df = pd.DataFrame(state.node_master)
+
         # Check if the node exists in node_master
-        if node_number not in tree_state.node_master['node_number'].values:
+        if node_number not in node_master_df['node_number'].values:
             return handle_error(f"Node {node_number} not found in tree", 400)
-        
+
         # Check if required state variables are set
-        if tree_state.df_for_tree is None:
+        if state.df_for_tree_key is None:
             return handle_error("Data for tree not available", 400)
-        if tree_state.X_col is None:
+        if state.X_col is None:
             return handle_error("Feature columns not defined", 400)
-        if tree_state.df_col is None:
+        if state.df_col is None:
             return handle_error("Column mapping not available", 400)
-        
+
+        df_for_tree = session_manager.active_df_for_tree(state)
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
         print(f"Auto training subtree for node {node_number}")
-        print(f"Node master shape: {tree_state.node_master.shape}")
-        print(f"Node datasets shape: {tree_state.node_datasets.shape}")
-        print(f"df_for_tree shape: {tree_state.df_for_tree.shape}")
-        print(f"X_col: {list(tree_state.X_col)}")
-        print(f"df_col shape: {tree_state.df_col.shape}")
-        
+        print(f"Node master shape: {node_master_df.shape}")
+        print(f"Node datasets shape: {node_datasets.shape}")
+        print(f"df_for_tree shape: {df_for_tree.shape}")
+        print(f"X_col: {list(state.X_col)}")
+        print(f"df_col shape: {df_col_df.shape}")
+
         print("About to call build_tree_node...")
-        tree_state.node_master, tree_state.node_datasets = build_tree_node(
-            tree_state.df_for_tree, 'badflag', tree_state.max_depth, 
-            tree_state.min_node_split, tree_state.min_leaf_size, 
-            tree_state.max_branches, node_number, tree_state.X_col, 
-            tree_state.node_master, tree_state.node_datasets, tree_state.df_col, tree_state.regression_flag
+        node_master_df, node_datasets = build_tree_node(
+            df_for_tree, 'badflag', state.max_depth,
+            state.min_node_split, state.min_leaf_size,
+            state.max_branches, node_number, state.X_col,
+            node_master_df, node_datasets, df_col_df, state.regression_flag
         )
         print("build_tree_node completed successfully")
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
         print(f"Error in autoTrainSubTree: {str(e)}")
@@ -1249,20 +1446,30 @@ def findSplit():
         
         node_number = data.get("node_number")
         
-        if tree_state.node_master is None or tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        tree_state.node_master, tree_state.node_datasets = split_node(
-            node_number, tree_state.min_leaf_size, tree_state.max_branches, 
-            tree_state.max_depth, tree_state.min_node_split, tree_state.X_col, 
-            tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col, tree_state.regression_flag,
-            tree_state.monotonic, []
+
+        node_master_df = pd.DataFrame(state.node_master)
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
+        node_master_df, node_datasets = split_node(
+            node_number, state.min_leaf_size, state.max_branches,
+            state.max_depth, state.min_node_split, state.X_col,
+            node_master_df, node_datasets, 'badflag', df_col_df, state.regression_flag,
+            state.monotonic, []
         )
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/findVar', methods=['POST'])
 @jwt_required()
@@ -1280,24 +1487,30 @@ def findVar():
         
         node_number = data.get("node_number")
         
-        if tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        if tree_state.regression_flag == 0:
+
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
+        if state.regression_flag == 0:
             top_vars = find_var(
-                node_number, tree_state.node_datasets, tree_state.X_col, 
-                'badflag', tree_state.df_col
+                node_number, node_datasets, state.X_col,
+                'badflag', df_col_df
             )
         else:
             top_vars = find_var_regression(
-                node_number, tree_state.node_datasets, tree_state.X_col, 
-                'badflag', tree_state.df_col
+                node_number, node_datasets, state.X_col,
+                'badflag', df_col_df
             )
-        
+
         return jsonify({"top_vars": df_to_json_safe(top_vars)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/bestSplit', methods=['POST'])
 @jwt_required()
@@ -1316,26 +1529,32 @@ def bestSplit():
         node_number = data.get("node_number")
         variable_name = data.get("variable_name")
         
-        if tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        if tree_state.regression_flag == 0:
+
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
+        if state.regression_flag == 0:
             df_out = best_split(
-                node_number, tree_state.node_datasets, tree_state.X_col, 
-                'badflag', variable_name, tree_state.min_leaf_size, 
-                tree_state.max_branches, tree_state.df_col
+                node_number, node_datasets, state.X_col,
+                'badflag', variable_name, state.min_leaf_size,
+                state.max_branches, df_col_df
             )
         else:
             df_out = best_split_regression(
-                node_number, tree_state.node_datasets, tree_state.X_col, 
-                'badflag', variable_name, tree_state.min_leaf_size, 
-                tree_state.max_branches, tree_state.df_col
+                node_number, node_datasets, state.X_col,
+                'badflag', variable_name, state.min_leaf_size,
+                state.max_branches, df_col_df
             )
-        
+
         return jsonify({"best_split": df_to_json_safe(df_out)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/evalSplit', methods=['POST'])
 @jwt_required()
@@ -1355,9 +1574,15 @@ def evalSplit():
         variable_name = data.get("variable_name")
         splits_data = data.get("splits")
         
-        if tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
+
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
         # Create DataFrame and add required columns
         df = pd.DataFrame(splits_data)
         
@@ -1403,12 +1628,12 @@ def evalSplit():
 
             df['list_values'] = df['list_values'].apply(normalize_list_values)
         
-        df_out = eval_split(node_number, tree_state.node_datasets, 'badflag', df, tree_state.df_col)
+        df_out = eval_split(node_number, node_datasets, 'badflag', df, df_col_df)
         
         return jsonify({"eval_split": df_to_json_safe(df_out)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/addNode', methods=['POST'])
 @jwt_required()
@@ -1428,9 +1653,16 @@ def addNode():
         variable_name = data.get("variable_name")
         splits_data = data.get("splits")
         
-        if tree_state.node_master is None or tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
+
+        node_master_df = pd.DataFrame(state.node_master)
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
         # Create DataFrame and add required columns
         df = pd.DataFrame(splits_data)
         
@@ -1474,15 +1706,18 @@ def addNode():
 
             df['list_values'] = df['list_values'].apply(normalize_list_values)
         
-        tree_state.node_master, tree_state.node_datasets = add_nodes(
-            df, node_number, tree_state.max_depth, tree_state.min_node_split, 
-            0, tree_state.node_master, tree_state.node_datasets, 'badflag', tree_state.df_col
+        node_master_df, node_datasets = add_nodes(
+            df, node_number, state.max_depth, state.min_node_split,
+            0, node_master_df, node_datasets, 'badflag', df_col_df
         )
-        
-        return jsonify({"success": True, "message": "Nodes added successfully", "node_master": df_to_json_safe(tree_state.node_master)})
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"success": True, "message": "Nodes added successfully", "node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/copyNode', methods=['POST'])
 @jwt_required()
@@ -1501,18 +1736,28 @@ def copyNode():
         from_node = data.get("from_node")
         to_node = data.get("to_node")
         
-        if tree_state.node_master is None or tree_state.node_datasets is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None or state.df_for_tree_key is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        tree_state.node_master, tree_state.node_datasets = copy_node_wrapper(
-            from_node, to_node, tree_state.node_master, tree_state.node_datasets, 
-            tree_state.max_depth, tree_state.min_node_split, 'badflag', tree_state.df_col
+
+        node_master_df = pd.DataFrame(state.node_master)
+        node_datasets = session_manager.node_datasets_for(state)
+        df_col_df = pd.DataFrame(state.df_col)
+
+        node_master_df, node_datasets = copy_node_wrapper(
+            from_node, to_node, node_master_df, node_datasets,
+            state.max_depth, state.min_node_split, 'badflag', df_col_df
         )
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/labelNode', methods=['POST'])
 @jwt_required()
@@ -1531,22 +1776,32 @@ def labelNode():
         node_number = data.get("node_number")
         label = data.get("label")
         
-        if tree_state.node_master is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None:
             return handle_error("No tree initialized. Please initialize tree first.", 400)
-        
-        tree_state.node_master = add_label(node_number, label, tree_state.node_master)
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        node_master_df = pd.DataFrame(state.node_master)
+        node_master_df = add_label(node_number, label, node_master_df)
+
+        state.node_master = df_to_json_safe(node_master_df)
+        session_manager.persist(sid, state)
+
+        return jsonify({"node_master": df_to_json_safe(node_master_df)})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/exportTree', methods=['GET', 'POST'])
 @jwt_required()
 def exportTree():
     """Export current tree state as JSON. Optionally upload to S3 if s3_path is provided."""
     try:
-        if tree_state.node_master is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None:
             return handle_error("No tree to export. Please initialize tree first.", 400)
         
         # Check if S3 path is provided
@@ -1565,17 +1820,17 @@ def exportTree():
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
                 export_data = {
-                    'file_name': tree_state.original_data_source or tree_state.file_name,
-                    'badflag': tree_state.badflag,
-                    'max_depth': tree_state.max_depth,
-                    'min_node_split': tree_state.min_node_split,
-                    'min_leaf_size': tree_state.min_leaf_size,
-                    'max_branches': tree_state.max_branches,
-                    'criteria': tree_state.criteria,
-                    'unique_var': tree_state.unique_var,
-                    'monotonic': tree_state.monotonic,
-                    'mapper': df_to_json_safe(tree_state.df_col),
-                    'node_master': df_to_json_safe(tree_state.node_master)
+                    'file_name': state.original_data_source or state.file_name,
+                    'badflag': state.badflag,
+                    'max_depth': state.max_depth,
+                    'min_node_split': state.min_node_split,
+                    'min_leaf_size': state.min_leaf_size,
+                    'max_branches': state.max_branches,
+                    'criteria': state.criteria,
+                    'unique_var': state.unique_var,
+                    'monotonic': state.monotonic,
+                    'mapper': df_to_json_safe(pd.DataFrame(state.df_col)),
+                    'node_master': df_to_json_safe(pd.DataFrame(state.node_master))
                 }
                 json.dump(export_data, tmp_file, indent=2)
                 tmp_path = tmp_file.name
@@ -1595,28 +1850,31 @@ def exportTree():
         
         # Return JSON response
         return jsonify({
-            'file_name': tree_state.file_name,
-            'badflag': tree_state.badflag,
-            'max_depth': tree_state.max_depth,
-            'min_node_split': tree_state.min_node_split,
-            'min_leaf_size': tree_state.min_leaf_size,
-            'max_branches': tree_state.max_branches,
-            'criteria': tree_state.criteria,
-            'unique_var': tree_state.unique_var,
-            'monotonic': tree_state.monotonic,
-            'mapper': df_to_json_safe(tree_state.df_col),
-            'node_master': df_to_json_safe(tree_state.node_master)
+            'file_name': state.file_name,
+            'badflag': state.badflag,
+            'max_depth': state.max_depth,
+            'min_node_split': state.min_node_split,
+            'min_leaf_size': state.min_leaf_size,
+            'max_branches': state.max_branches,
+            'criteria': state.criteria,
+            'unique_var': state.unique_var,
+            'monotonic': state.monotonic,
+            'mapper': df_to_json_safe(pd.DataFrame(state.df_col)),
+            'node_master': df_to_json_safe(pd.DataFrame(state.node_master))
         })
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/downloadTree', methods=['GET', 'POST'])
 @jwt_required()
 def downloadTree():
     """Download current tree state as JSON file. Optionally upload to S3 if s3_path is provided."""
     try:
-        if tree_state.node_master is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None:
             return handle_error("No tree to download. Please initialize tree first.", 400)
         
         # Check if S3 path is provided
@@ -1629,17 +1887,17 @@ def downloadTree():
             s3_path = request.args.get('s3_path')
         
         data = {
-            'file_name': tree_state.original_data_source or tree_state.file_name,  # Use original data source if available
-            'badflag': tree_state.badflag,
-            'max_depth': tree_state.max_depth,
-            'min_node_split': tree_state.min_node_split,
-            'min_leaf_size': tree_state.min_leaf_size,
-            'max_branches': tree_state.max_branches,
-            'criteria': tree_state.criteria,
-            'unique_var': tree_state.unique_var,
-            'monotonic': tree_state.monotonic,
-            'mapper': df_to_json_safe(tree_state.df_col),
-            'node_master': df_to_json_safe(tree_state.node_master)
+            'file_name': state.original_data_source or state.file_name,  # Use original data source if available
+            'badflag': state.badflag,
+            'max_depth': state.max_depth,
+            'min_node_split': state.min_node_split,
+            'min_leaf_size': state.min_leaf_size,
+            'max_branches': state.max_branches,
+            'criteria': state.criteria,
+            'unique_var': state.unique_var,
+            'monotonic': state.monotonic,
+            'mapper': df_to_json_safe(pd.DataFrame(state.df_col)),
+            'node_master': df_to_json_safe(pd.DataFrame(state.node_master))
         }
         
         # If S3 path provided, upload to S3
@@ -1675,20 +1933,24 @@ def downloadTree():
         return response
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/getTreeData', methods=['GET'])
 @jwt_required()
 def getTreeData():
     """Get current tree data"""
     try:
-        if tree_state.node_master is None:
+        sid = session_id_from_jwt()
+        state = session_manager.resolve(sid)
+
+        if state.node_master is None:
             return handle_error("No tree data available. Please build a tree first.", 400)
-        
-        return jsonify({"node_master": df_to_json_safe(tree_state.node_master)})
+
+        # state.node_master is already a JSON-safe list of records.
+        return jsonify({"node_master": state.node_master})
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/uploadFileToS3', methods=['POST'])
 @jwt_required()
@@ -1751,7 +2013,7 @@ def uploadFileToS3():
             return handle_error(f"Failed to upload to S3: {str(e)}", 500)
     
     except Exception as e:
-        return handle_error(str(e))
+        return handle_storage_error(e)
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
