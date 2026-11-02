@@ -1,37 +1,18 @@
 [Unit]
 Description=Decision Tree API
-After=network.target
+Wants=network-online.target
+After=network-online.target redis-server.service
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/project_iDT_2/backend
-Environment="PATH=/home/ubuntu/project_iDT_2/backend/venv/bin"
-EnvironmentFile=/home/ubuntu/project_iDT_2/backend/.env
-
-# Pre-start: Ensure port is free
-ExecStartPre=/bin/bash -c 'if command -v lsof &> /dev/null; then PIDS=$(sudo lsof -ti:%i 2>/dev/null || echo ""); if [ ! -z "$PIDS" ]; then sudo kill -9 $PIDS 2>/dev/null || true; sleep 1; fi; fi'
-
-# Use the stop script to clean up before starting
-ExecStartPre=/bin/bash /home/ubuntu/project_iDT_2/backend/stop.sh || true
-
-# Wait a moment after cleanup
-ExecStartPre=/bin/sleep 2
-
-# Start the service
-ExecStart=/home/ubuntu/project_iDT_2/backend/venv/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:${PORT:-5000} wsgi:app
-
-# Stop gracefully
-ExecStop=/bin/kill -s TERM $MAINPID
-
-# Restart configuration
-Restart=always
-RestartSec=10
-
-# Timeout settings
-TimeoutStartSec=30
-TimeoutStopSec=30
+# start.sh loads .env, including quoted hashes and inline comments.
+# No EnvironmentFile, shell expressions, stop.sh hooks, or port-killing commands.
+ExecStart=/bin/bash /home/ubuntu/project_iDT_2/backend/start.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
 
 [Install]
 WantedBy=multi-user.target
-

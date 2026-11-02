@@ -3,7 +3,7 @@ import os
 import multiprocessing
 
 # Server socket
-bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
+bind = f"127.0.0.1:{os.getenv('PORT', '5000')}"
 backlog = 2048
 
 # Worker processes
@@ -14,7 +14,7 @@ backlog = 2048
 workers = int(os.getenv('WEB_CONCURRENCY', 4))
 worker_class = 'sync'
 worker_connections = 1000
-timeout = 30
+timeout = int(os.getenv('GUNICORN_TIMEOUT', '300'))
 keepalive = 2
 
 # Logging

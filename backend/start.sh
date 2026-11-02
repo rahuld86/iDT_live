@@ -1,62 +1,51 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Foreground entry point for both interactive use and systemd.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-# Production startup script for EC2 deployment
-
-# Activate virtual environment if it exists
-if [ -d "venv" ]; then
-    source venv/bin/activate
+if [[ ! -x venv/bin/python ]]; then
+    echo "Error: backend/venv is missing. Run ./deploy.sh first." >&2
+    exit 1
 fi
-
-# Load environment variables
-if [ -f ".env" ]; then
-    export $(cat .env | grep -v '^#' | xargs)
-fi
-
-# Set default values
-export PORT=${PORT:-5000}
-export WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
-export LOG_LEVEL=${LOG_LEVEL:-info}
-
-# Check if port is already in use
-check_port() {
-    PORT=$1
-    # Try multiple methods to check if port is in use
-    if command -v lsof &> /dev/null; then
-        if lsof -ti:${PORT} &> /dev/null || sudo lsof -ti:${PORT} &> /dev/null; then
-            return 1
-        fi
-    elif command -v netstat &> /dev/null; then
-        if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
-            return 1
-        fi
-    elif command -v ss &> /dev/null; then
-        if ss -tuln 2>/dev/null | grep -q ":${PORT} "; then
-            return 1
-        fi
-    fi
-    return 0
-}
-
-# Check if port is in use
-if ! check_port ${PORT}; then
-    echo "Error: Port ${PORT} is already in use"
-    echo ""
-    echo "To find what's using the port, run:"
-    echo "  sudo lsof -i :${PORT}"
-    echo "  or"
-    echo "  sudo netstat -tulpn | grep :${PORT}"
-    echo ""
-    echo "To stop existing processes, run:"
-    echo "  ./stop.sh"
-    echo "  or if using systemd:"
-    echo "  sudo systemctl stop decision-tree-api"
-    echo ""
+if [[ ! -f .env ]]; then
+    echo "Error: backend/.env is missing. Run ./deploy.sh and configure it first." >&2
     exit 1
 fi
 
-# Start gunicorn
-exec gunicorn \
-    --config gunicorn_config.py \
-    --bind 0.0.0.0:${PORT} \
-    wsgi:app
+# Trusted Bash-compatible configuration. Single-quote hashes/passwords containing $.
+# This preserves quoted spaces and ignores inline comments, unlike export/xargs.
+set -a
+source ./.env
+set +a
 
+export PORT="${PORT:-5000}"
+export WEB_CONCURRENCY="${WEB_CONCURRENCY:-4}"
+export LOG_LEVEL="${LOG_LEVEL:-info}"
+export GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-300}"
+
+venv/bin/python - <<'PY'
+import os
+import sys
+
+if not (3, 10) <= sys.version_info[:2] <= (3, 12):
+    raise SystemExit("Unsupported venv Python; use Python 3.10-3.12. See ../DEPLOYMENT.md.")
+secret = os.getenv("JWT_SECRET_KEY", "")
+if len(secret) < 32 or secret in {"your-super-secret-key-change-in-production", "change-this-secret-key"}:
+    raise SystemExit("Configure JWT_SECRET_KEY with ./setup_user_password.sh before startup.")
+if not os.getenv("AUTH_USERS", "").strip():
+    raise SystemExit("Configure AUTH_USERS with ./setup_user_password.sh before startup.")
+for entry in os.environ["AUTH_USERS"].split():
+    username, separator, password_hash = entry.partition(":")
+    if not username or not separator or not password_hash.startswith(("scrypt:", "pbkdf2:")) or password_hash.count("$") != 2:
+        raise SystemExit("Invalid AUTH_USERS entry. Use ./setup_user_password.sh USER --reset; single-quote AUTH_USERS.")
+PY
+
+mkdir -p run
+chmod 700 run
+# Gunicorn owns the bind check; never sudo or kill another process to free a port.
+exec venv/bin/python -m gunicorn \
+    --config gunicorn_config.py \
+    --bind "127.0.0.1:${PORT}" \
+    --pid "$PWD/run/gunicorn.pid" \
+    --timeout "$GUNICORN_TIMEOUT" \
+    wsgi:app

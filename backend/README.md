@@ -13,6 +13,11 @@ This is the backend API for the Interactive Decision Tree web application. It pr
 
 ## Installation
 
+For EC2/production use [the deployment guide](../DEPLOYMENT.md), not a bare
+system-Python install. The pinned dependencies require Python 3.10-3.12 (3.12
+recommended). Run `./deploy.sh`, configure authentication with
+`./setup_user_password.sh USER`, then use `./start.sh` or the systemd template.
+
 1. Install Python dependencies:
 ```bash
 pip install -r requirements.txt
@@ -70,15 +75,13 @@ All endpoints include comprehensive error handling with standardized error respo
 
 ## State Management
 
-The application uses a centralized `TreeState` class to manage all tree-related data and configuration, replacing the previous global variable approach.
+The application uses per-username `SessionState` metadata in Redis, Parquet
+datasets on disk, and bounded per-worker caches. See `session/` and the deployment
+guide for configuration and lifecycle details.
 
 ## Dependencies
 
-- Flask 2.3.3
-- Flask-CORS 4.0.0
-- pandas 2.1.1
-- numpy 1.24.3
-- python-dotenv 1.0.0
+The exact runtime and test dependency versions are pinned in `requirements.txt`.
 
 ## Development
 

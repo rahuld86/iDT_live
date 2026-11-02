@@ -1,30 +1,20 @@
-#!/bin/bash
-
-# Script to check Gunicorn worker count
-
-echo "Checking Gunicorn processes..."
-
-# Count master + worker processes
-TOTAL=$(ps aux | grep '[g]unicorn.*wsgi:app' | wc -l)
-
-# Count worker processes only (masters don't have --config in the worker process line)
-WORKERS=$(ps aux | grep '[g]unicorn.*wsgi:app' | grep -v '--config.*--bind' | wc -l)
-
-# Or more accurately, count processes that are not the master
-# Master typically has different command pattern
-MASTER_COUNT=$(ps aux | grep '[g]unicorn.*wsgi:app' | grep -c '--config.*--bind' || echo 0)
-WORKER_COUNT=$(ps aux | grep '[g]unicorn.*wsgi:app' | grep -v '--config.*--bind' | wc -l)
-
-echo "Total Gunicorn processes: $TOTAL"
-echo "Master processes: $MASTER_COUNT"
-echo "Worker processes: $WORKER_COUNT"
-
-if [ "$WORKER_COUNT" -eq 1 ]; then
-    echo "✓ Correct: Running with 1 worker (2 total processes = 1 master + 1 worker)"
-elif [ "$WORKER_COUNT" -gt 1 ]; then
-    echo "⚠ Warning: Running with $WORKER_COUNT workers (may cause state issues)"
-    echo "  Consider setting WEB_CONCURRENCY=1 in .env"
-else
-    echo "✗ Error: No workers found"
+#!/usr/bin/env bash
+# Inspect this application's master and direct children, not all Gunicorn apps.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+MASTER_PID=""
+if command -v systemctl >/dev/null 2>&1; then
+    MASTER_PID="$(systemctl show decision-tree-api.service --property=MainPID --value 2>/dev/null || true)"
 fi
-
+if [[ -z "$MASTER_PID" || "$MASTER_PID" == 0 ]]; then
+    if [[ -f run/gunicorn.pid ]]; then
+        MASTER_PID="$(cat run/gunicorn.pid)"
+    fi
+fi
+if [[ ! "$MASTER_PID" =~ ^[0-9]+$ || "$MASTER_PID" -le 1 ]]; then
+    echo "No running application master found." >&2
+    exit 1
+fi
+ps -p "$MASTER_PID" -o pid,ppid,args
+ps --ppid "$MASTER_PID" -o pid,ppid,args
+echo "Compare children with WEB_CONCURRENCY in .env; Redis-backed state supports multiple workers."

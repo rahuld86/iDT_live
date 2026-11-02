@@ -1,0 +1,4 @@
+# Keep deployment scripts readable by Bash after checkout/copy from Windows.
+*.sh text eol=lf
+*.service.example text eol=lf
+backend/env.example text eol=lf

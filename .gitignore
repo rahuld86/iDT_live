@@ -23,6 +23,9 @@ build/
 htmlcov/
 *.log
 backend/df_store/
+backend/run/
+backend/venv-backup*/
+backend/venv-py314-backup*/
 backend/KeyError
 
 # Local editor and OS files

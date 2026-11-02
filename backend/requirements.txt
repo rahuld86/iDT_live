@@ -1,3 +1,7 @@
+# Runtime: Python 3.10-3.12; Python 3.12 recommended.
+# NumPy 1.26.4 does not support Python 3.13/3.14. Keep these pins and use
+# a compatible interpreter instead of attempting scientific source builds.
+# deploy.sh requires prebuilt pandas/numpy/pyarrow wheels.
 Flask==3.0.3
 Flask-CORS==4.0.0
 Flask-JWT-Extended==4.6.0

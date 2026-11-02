@@ -4,7 +4,7 @@ server {
 
     # Frontend static files
     location / {
-        root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;  # Update this path to match your installation
+        root /var/www/decision-tree;  # Copy frontend dist/ here; see ../DEPLOYMENT.md
         try_files $uri $uri/ /index.html;
         
         # Cache static assets

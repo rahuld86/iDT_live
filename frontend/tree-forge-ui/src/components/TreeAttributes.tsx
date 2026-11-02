@@ -174,7 +174,7 @@ const TreeAttributes = ({ attributes, onAttributeChange, regressionFlag = 0 }: T
             
             <div className="space-y-2 md:col-span-2">
               <div className="flex items-center gap-2">
-                <Label htmlFor="monotonous-splits">Monotonous Splits</Label>
+                <Label htmlFor="monotonous-splits">Monotonic Splits</Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />

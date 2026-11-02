@@ -1,495 +1,358 @@
-# End-to-End Deployment Guide (Fresh EC2 Instance)
+# EC2 deployment guide
 
-This guide walks through deploying the Decision Tree application on a brand-new EC2
-instance, from launching the instance to a working app in the browser. It covers
-**Redis**, the **Flask backend**, the **React frontend**, **nginx**, and the
-**systemd** service, including all the configuration the session-state-isolation
-feature requires (Redis-backed sessions, DataFrame store on disk, raised upload
-limit, and multiple Gunicorn workers).
+This is the canonical runbook for this repository. The deployment scripts support
+Ubuntu on EC2, including Ubuntu 26.04 with system Python 3.14. Use Python **3.12**
+for the application; the pinned dependencies also support 3.10-3.12. Do not
+replace Ubuntu's system Python or loosen dependency pins to fix an installation.
 
-> For deep troubleshooting (nginx permissions, port conflicts, npm/build errors),
-> see `backend/DEPLOYMENT.md`. This document is the primary, sequential runbook.
+## 1. Instance and system packages
 
-## Architecture on a single instance
+Use an x86_64 Ubuntu LTS instance with enough RAM for your datasets, workers, and
+DataFrame caches, plus space for uploaded CSVs and Parquet files. Size from actual
+workloads; a per-worker cache budget is not the application's total RAM usage.
 
-Everything runs on one EC2 instance (Phase 1):
-
-- **nginx** serves the built frontend and reverse-proxies `/api` to Gunicorn.
-- **Gunicorn** runs the Flask backend with multiple workers.
-- **Redis** (same instance) holds per-user session metadata (small data + the tree
-  as JSON + pointers to heavy DataFrames).
-- **Local disk** (`df_store/`) holds the heavy pandas DataFrames as parquet files.
-
-Because session state is externalized to Redis + disk, multiple Gunicorn workers
-are safe and users are isolated from each other.
-
-```
-Browser ──HTTP──> nginx ──/api──> Gunicorn (N workers) ──> Redis (session metadata)
-                    │                                   └──> df_store/ (parquet frames)
-                    └── serves frontend dist/
-```
-
----
-
-## Step 0 — Launch and connect to the EC2 instance
-
-1. In the AWS Console, launch an instance:
-   - **AMI:** Ubuntu Server 22.04 LTS (x86_64).
-   - **Instance type:** `r5.xlarge` (4 vCPU, 32 GB RAM) is a good fit for ~10
-     concurrent users with ~500 MB datasets. Smaller (`t3.large`) works for light use.
-   - **Storage:** at least 50 GB gp3 EBS (heavy DataFrames are written to disk).
-   - **Key pair:** select or create one for SSH.
-
-2. **Security Group — inbound rules:**
-   | Type  | Port | Source                | Purpose            |
-   |-------|------|-----------------------|--------------------|
-   | SSH   | 22   | Your IP only          | Admin access       |
-   | HTTP  | 80   | 0.0.0.0/0             | App traffic        |
-   | HTTPS | 443  | 0.0.0.0/0             | App traffic (TLS)  |
-
-   Do **not** open port 6379 (Redis) or 5000 (Gunicorn) to the internet — both
-   stay bound to localhost.
-
-3. Connect:
-   ```bash
-   ssh -i /path/to/key.pem ubuntu@<EC2_PUBLIC_IP>
-   ```
-
----
-
-## Step 1 — Install system packages
+Allow SSH (22) from your administrator IP, and HTTP/HTTPS (80/443) as appropriate.
+Keep 5000 and 6379 closed externally. Gunicorn and Redis listen on localhost.
 
 ```bash
-# Update the base system
-sudo apt update && sudo apt upgrade -y
-
-# Python, build tools, git, nginx
-sudo apt install -y python3-pip python3-venv python3-dev build-essential git nginx
-
-# Redis server
-sudo apt install -y redis-server
-
-# Node.js 18 LTS (for building the frontend)
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Verify versions
-python3 --version        # 3.10+ expected on Ubuntu 22.04
-node --version           # v18.x
-redis-server --version
-nginx -v
+sudo apt update
+sudo apt install -y ca-certificates curl git nginx redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping
+# Expected: PONG
 ```
 
----
+Check Redis's bind/protected-mode settings in /etc/redis/redis.conf before use.
+If Redis requires a password, set the same single-quoted REDIS_PASSWORD in .env.
 
-## Step 2 — Configure and start Redis
-
-Redis runs on the same instance and only listens on localhost.
+Install Python 3.12 alongside the system Python with uv, as the normal ubuntu
+user. The installer and managed Python distributions come from Astral.
 
 ```bash
-# Ensure Redis binds to localhost only (default on Ubuntu, but confirm)
-sudo grep -E "^bind" /etc/redis/redis.conf
-# Expected: bind 127.0.0.1 ::1
-
-# (Optional, recommended) set a password: uncomment/set 'requirepass' in the config
-# sudo nano /etc/redis/redis.conf   ->  requirepass <a-strong-password>
-
-# Enable Redis to start on boot and start it now
-sudo systemctl enable redis-server
-sudo systemctl restart redis-server
-
-# Verify it responds
-redis-cli ping           # -> PONG
-# If you set a password:
-# redis-cli -a '<password>' ping
+curl -LsSf https://astral.sh/uv/install.sh | sh
+"$HOME/.local/bin/uv" python install 3.12
 ```
 
-Redis persistence (RDB snapshots) is enabled by default on Ubuntu, which is fine —
-sessions are short-lived and also expire via TTL. No further tuning is required for
-Phase 1.
+Reference: [uv Python installation](https://docs.astral.sh/uv/guides/install-python/).
 
----
-
-## Step 3 — Get the application code onto the instance
+For frontend builds, install a supported Node.js LTS release (for example Node 22)
+using the official Node.js installation instructions. Then verify:
 
 ```bash
-# Clone your repository (or copy files up with scp)
+node --version
+npm --version
+```
+
+Do not reuse the old Node 18 instructions; Node 18 is end-of-life.
+See the [Node.js release schedule](https://github.com/nodejs/Release).
+
+## 2. Copy the repository and deploy the backend
+
+The examples assume /home/ubuntu/project_iDT_2 contains backend/, frontend/, and
+specs/. Adjust the paths if your clone includes an extra parent directory.
+
+```bash
 cd ~
-git clone <YOUR_REPO_URL> project_iDT_2
-# Resulting layout: /home/ubuntu/project_iDT_2/{backend,frontend,...}
-
-cd ~/project_iDT_2
-```
-
-If you copy with `scp` instead of git:
-```bash
-# from your local machine
-scp -i /path/to/key.pem -r ./project_iDT_2 ubuntu@<EC2_PUBLIC_IP>:/home/ubuntu/
-```
-
-Make the helper scripts executable:
-```bash
+git clone <YOUR_REPOSITORY_URL> project_iDT_2
 cd ~/project_iDT_2/backend
-chmod +x deploy.sh start.sh stop.sh setup_nginx.sh
-```
-
----
-
-## Step 4 — Deploy the backend
-
-The `deploy.sh` script creates a virtualenv, installs `requirements.txt` (which now
-includes `redis`, `pyarrow`, and `APScheduler`), creates the `uploads/` directory,
-and seeds a `.env` from `env.example`.
-
-```bash
-cd ~/project_iDT_2/backend
+chmod +x deploy.sh start.sh stop.sh setup_user_password.sh
 ./deploy.sh
 ```
 
-### 4a. Create the DataFrame store directory
+Run deploy.sh as ubuntu, not root. It works from any current directory. It:
 
-Heavy DataFrames are persisted here as parquet files. It must exist and be writable
-by the service user (`ubuntu`):
+- Reuses a supported existing venv without replacing it.
+- Prefers python3.12, accepts a compatible python3, or uses uv to create Python 3.12.
+- Accepts an explicit interpreter with PYTHON_BIN=/path/to/python3.12 ./deploy.sh.
+- Installs the pinned dependencies, requires wheels for pandas/numpy/pyarrow, and
+  runs pip check.
+- Creates runtime directories and seeds .env only if absent.
+- Preserves existing credentials and never starts, stops, or disables services.
+
+### Recover from a Python 3.14 virtual environment
+
+The pandas metadata error in this session contained Python 3.14 and a compiler
+killed while building pandas. NumPy 1.26.4 supports Python 3.9-3.12; it is not a
+Python 3.14 dependency set. More RAM or installing pkg-config alone is not the fix.
+See [NumPy's release notes](https://numpy.org/doc/1.26/release/1.26.4-notes.html).
+
+Stop the running application before replacing its environment:
 
 ```bash
-mkdir -p ~/project_iDT_2/backend/df_store
+sudo systemctl stop decision-tree-api  # if installed
+# For a manual ./start.sh process, press Ctrl+C in that terminal.
+cd ~/project_iDT_2/backend
+deactivate 2>/dev/null || true
+mv venv "venv-backup-$(date +%Y%m%d%H%M%S)"
+./deploy.sh
+venv/bin/python --version
+# Python 3.12.x on the uv path
 ```
 
-### 4b. Configure environment variables
+The old directory is a backup, not an environment to run in place after moving.
+Do not delete .env, uploads/, df_store/, or Redis state when recreating venv.
 
-Edit the `.env` the deploy script created:
+## 3. Configure .env and authentication
 
-```bash
-nano ~/project_iDT_2/backend/.env
-```
-
-Set the following (the session-isolation feature adds the Redis / session / store
-variables). A complete reference lives in `backend/env.example`:
-
-```env
-# --- Flask ---
-FLASK_ENV=production
-FLASK_DEBUG=False
-FLASK_PORT=5000
-
-# --- CORS: set to how users reach the app (your EC2 IP or domain) ---
-CORS_ORIGINS=http://<EC2_PUBLIC_IP>
-
-# --- Auth (generate a real hash; see note below) ---
-JWT_SECRET_KEY=<generate-a-long-random-secret>
-JWT_ACCESS_TOKEN_EXPIRES=86400
-AUTH_USERS=idfcuser:<bcrypt-hash-here>
-
-# --- Redis (session metadata store; same instance in Phase 1) ---
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_DB=0
-# REDIS_PASSWORD=<password>        # only if you set 'requirepass' in redis.conf
-
-# --- Session lifecycle ---
-SESSION_TTL_SECONDS=86400          # abandoned sessions expire after 24h
-SESSION_CLEANUP_INTERVAL=3600      # background cleanup sweep cadence (seconds)
-
-# --- DataFrame store ---
-DF_STORE_BACKEND=disk
-DF_STORE_DIR=/home/ubuntu/project_iDT_2/backend/df_store
-DF_CACHE_MAX_BYTES=2147483648      # 2GB per-worker cache budget (tune to RAM)
-
-# --- Upload limit (~600MB) ---
-MAX_UPLOAD_SIZE=629145600
-
-# --- Gunicorn: multiple workers now safe (state is externalized) ---
-PORT=5000
-WEB_CONCURRENCY=4
-LOG_LEVEL=info
-
-# --- AWS S3 (optional, only for S3 import/export of trees) ---
-# AWS_ACCESS_KEY_ID=...
-# AWS_SECRET_ACCESS_KEY=...
-# AWS_REGION=ap-south-1
-```
-
-Generate the values that must be secret:
-```bash
-# JWT secret
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
-
-# A bcrypt password hash for a login user (run inside the venv so werkzeug is present)
-cd ~/project_iDT_2/backend && source venv/bin/activate
-python3 -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('YOUR_PASSWORD'))"
-```
-Put the hash into `AUTH_USERS` as `username:hash`.
-
-> Notes
-> - `DF_CACHE_MAX_BYTES` is **per worker**. With `WEB_CONCURRENCY=4` the cache can
->   use up to ~8 GB total — keep it comfortably under instance RAM.
-> - `WEB_CONCURRENCY` rule of thumb: `(2 × vCPU) + 1`, capped by RAM.
-> - If `REDIS_PASSWORD` is unset, leave it commented out.
-
-### 4c. Smoke-test the backend manually
+deploy.sh creates backend/.env from backend/env.example only when it is missing.
+Never overwrite an existing server's .env with the template during updates.
+The template intentionally contains no working user or JWT secret.
 
 ```bash
 cd ~/project_iDT_2/backend
-source venv/bin/activate
-./start.sh
-# In another shell:
-curl http://localhost:5000/api/health      # -> {"status":"healthy",...}
-# Stop the manual run before setting up systemd:
-./stop.sh
+nano .env
+./setup_user_password.sh idfcuser
 ```
 
----
+The helper prompts for a password and confirmation using hidden input, writes a
+scrypt hash in single quotes, generates a random JWT secret if missing/invalid,
+and preserves other users and settings. It never prints passwords, hashes, or
+secrets. A valid existing JWT secret is preserved.
 
-## Step 5 — Run the backend under systemd
+Configure these values:
 
-Install the service (an up-to-date template lives at
-`backend/systemd.service.example`):
+```env
+# Exactly the frontend address users open, including scheme and nonstandard port.
+CORS_ORIGINS='http://YOUR_PUBLIC_IP'
+# Or: CORS_ORIGINS='https://yourdomain.com'
+# Or: CORS_ORIGINS='http://YOUR_PUBLIC_IP,https://yourdomain.com'
+
+JWT_ACCESS_TOKEN_EXPIRES=86400  # 24-hour login tokens
+PORT=5000
+WEB_CONCURRENCY=4
+GUNICORN_TIMEOUT=300
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_DB=0
+SESSION_TTL_SECONDS=86400
+SESSION_CLEANUP_INTERVAL=3600
+DF_STORE_BACKEND=disk
+DF_STORE_DIR='./df_store'
+DF_CACHE_MAX_BYTES=2147483648
+MAX_UPLOAD_SIZE=629145600
+AWS_REGION=ap-south-1  # use your bucket's actual region
+```
+
+The helper supplies JWT_SECRET_KEY and AUTH_USERS; do not paste placeholders.
+The stored format is AUTH_USERS='user1:scrypt:...$salt$hash user2:scrypt:...$salt$hash'
+on one line. Use the actual password at login, not its stored hash.
+
+.env is trusted Bash-compatible configuration, loaded by start.sh. Single-quote
+values containing dollar signs, spaces, or shell metacharacters. Inline comments
+are supported. Do not use export $(cat .env ... | xargs), double-quote hashes, or
+install untrusted .env files. Keep .env private (chmod 600); it is Git-ignored.
+The helper changes .env to mode 600; start the service as the same owning user.
+
+CORS_ORIGINS is the frontend origin, not /api or the backend's internal address.
+Do not add a trailing slash or spaces after commas. '*' permits all origins;
+restrict it for production. With nginx serving the frontend and /api together,
+normal requests are same-origin and do not need CORS permission.
+
+A 2 GiB cache times four workers is up to 8 GiB for caches alone, plus data loading,
+training, Python, Redis, and OS overhead. Reduce workers/cache budgets on small
+instances. GUNICORN_TIMEOUT must cover the synchronous upload/training workload;
+nginx's proxy timeout does not override Gunicorn's timeout.
+
+### Add or reset users
 
 ```bash
-sudo cp ~/project_iDT_2/backend/systemd.service.example /etc/systemd/system/decision-tree-api.service
-# Review it; the defaults assume WorkingDirectory /home/ubuntu/project_iDT_2/backend
-sudo nano /etc/systemd/system/decision-tree-api.service
-```
-
-The service reads `.env` (so Redis/store/worker settings apply) and starts Gunicorn
-via `wsgi:app`. Enable and start it:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable decision-tree-api
-sudo systemctl start decision-tree-api
-sudo systemctl status decision-tree-api        # should be active (running)
-```
-
-The background session-cleanup job starts automatically with the app (it sweeps
-orphaned parquet files every `SESSION_CLEANUP_INTERVAL` seconds).
-
----
-
-## Step 6 — Build the frontend
-
-```bash
-cd ~/project_iDT_2/frontend/tree-forge-ui
-
-npm install
-# If npm errors with ENOTEMPTY, use the clean installer:
-# chmod +x clean_install.sh && ./clean_install.sh
-
-# Build; the API is served under /api on the same origin via nginx
-VITE_API_BASE_URL=/api npm run build
-
-# Verify the build output exists
-ls -la dist/index.html
-```
-
-The compiled static site is in
-`~/project_iDT_2/frontend/tree-forge-ui/dist`, which nginx will serve.
-
----
-
-## Step 7 — Configure nginx
-
-nginx serves the frontend and proxies `/api` to Gunicorn. The repo ships an example
-at `backend/nginx.conf.example` (already set to `client_max_body_size 600M`).
-
-```bash
-sudo nano /etc/nginx/sites-available/decision-tree
-```
-
-```nginx
-server {
-    listen 80 default_server;
-    server_name _;   # accept any host/IP; replace with your domain if you have one
-
-    # Frontend static files
-    location / {
-        root /home/ubuntu/project_iDT_2/frontend/tree-forge-ui/dist;
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Backend API -> Gunicorn
-    location /api {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Large uploads can take a while
-        proxy_connect_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
-    }
-
-    # Must match MAX_UPLOAD_SIZE (~600MB) so large CSVs reach the backend
-    client_max_body_size 600M;
-}
-```
-
-Enable the site and reload:
-
-```bash
-# Remove the default site so our server block is the default
-sudo rm -f /etc/nginx/sites-enabled/default
-
-# Link our site (remove a stale link first if it exists)
-sudo rm -f /etc/nginx/sites-enabled/decision-tree
-sudo ln -s /etc/nginx/sites-available/decision-tree /etc/nginx/sites-enabled/
-
-sudo nginx -t                 # test config
-sudo systemctl enable nginx
-sudo systemctl restart nginx
-```
-
-### Fix the home-directory permission gotcha
-
-On Ubuntu `/home/ubuntu` is `700`, so the nginx user cannot traverse into it to read
-`dist/`. This causes a 500 / "Permission denied" error. Fix:
-
-```bash
-sudo chmod 755 /home/ubuntu
-# verify nginx can traverse
-sudo -u www-data test -x /home/ubuntu && echo OK || echo STILL_BLOCKED
-sudo systemctl reload nginx
-```
-
-If you prefer not to loosen the home directory, copy the build to `/var/www`:
-```bash
-sudo mkdir -p /var/www/decision-tree
-sudo cp -r ~/project_iDT_2/frontend/tree-forge-ui/dist/* /var/www/decision-tree/
-sudo chown -R www-data:www-data /var/www/decision-tree
-# then set 'root /var/www/decision-tree;' in the nginx config and reload
-```
-
----
-
-## Step 8 — Verify end to end
-
-```bash
-# 1. Redis is up
-redis-cli ping                                  # PONG
-
-# 2. Backend is up (direct)
-curl http://localhost:5000/api/health           # {"status":"healthy",...}
-
-# 3. Backend via nginx
-curl http://localhost/api/health                # same JSON through the proxy
-
-# 4. Frontend is served
-curl -I http://localhost/                        # 200 OK, text/html
-```
-
-Then open `http://<EC2_PUBLIC_IP>/` in a browser, log in with the user you configured
-in `AUTH_USERS`, and run an upload → set target → build tree flow.
-
-Confirm session isolation is actually working:
-```bash
-# After a logged-in user uploads a file, a session key appears in Redis:
-redis-cli keys 'session:*'
-# And a parquet file appears under the DataFrame store:
-ls -R ~/project_iDT_2/backend/df_store
-# After that user logs out, both are purged.
-```
-
----
-
-## Step 9 (recommended) — Enable HTTPS
-
-If you have a domain pointing at the instance:
-
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
-# Then update CORS_ORIGINS in .env to https://your-domain.com and restart:
+./setup_user_password.sh seconduser
+./setup_user_password.sh idfcuser --reset
 sudo systemctl restart decision-tree-api
 ```
 
-Certbot updates the nginx config and sets up auto-renewal.
+Adding an existing user fails unless --reset is supplied. Other users are retained.
+Usernames support letters, digits, underscores, dots, @ and hyphens. Passwords are
+never passed on the command line. Each distinct username maps to one workspace;
+sessions for the same username share that workspace. A password reset does not
+revoke previously issued stateless JWTs; token expiry still applies.
 
----
+## 4. Optional S3 access
 
-## Updating / redeploying
+Local CSV uploads and login do not need AWS credentials. For S3 reads and writes
+from EC2, attach an IAM role granting s3:GetObject and s3:PutObject on the required
+bucket/prefix. Being in the same AWS account is not sufficient permission.
+
+In EC2: Instances -> select instance -> Actions -> Security -> Modify IAM role.
+Create a role trusted by EC2 through IAM first if needed.
+
+Remove AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from .env when using the role,
+including the template's old placeholder values. Boto3 obtains rotating role
+credentials automatically when no other credentials override them. Check for old
+credentials in the service environment or the ubuntu user's ~/.aws/credentials if
+the wrong identity is used. Keep AWS_REGION set to the bucket's region.
+
+SSE-KMS objects may also require kms:Decrypt for reads and kms:GenerateDataKey for
+writes, with permission in the KMS key policy. See [backend/S3_SETUP.md](backend/S3_SETUP.md).
+Do not enable DF_STORE_BACKEND=s3: the heavy DataFrame storage backend currently
+implements disk only. S3 file import/export is a separate, implemented feature.
+
+## 5. Manual startup and health check
+
+```bash
+cd ~/project_iDT_2/backend
+./start.sh
+```
+
+Gunicorn runs in the foreground: the terminal staying occupied after "Listening"
+and "Booting worker" is expected. Use a second SSH session:
+
+```bash
+curl -i http://127.0.0.1:5000/api/health
+# Expected: HTTP 200 and {"message":"Decision Tree API is running","status":"healthy"}
+```
+
+This only confirms the health route responds; upload a CSV and build a tree to
+exercise authentication, Redis and dataset storage. Press Ctrl+C in the first
+terminal before starting systemd. Do not run manual and systemd instances together.
+
+start.sh loads .env before Gunicorn config, invokes venv/bin/python explicitly,
+binds localhost, and records its master PID in backend/run/gunicorn.pid.
+
+## 6. Install the systemd service
+
+```bash
+sudo cp ~/project_iDT_2/backend/systemd.service.example /etc/systemd/system/decision-tree-api.service
+sudo nano /etc/systemd/system/decision-tree-api.service
+# Confirm User, WorkingDirectory and ExecStart paths match this installation.
+sudo systemd-analyze verify /etc/systemd/system/decision-tree-api.service
+sudo systemctl daemon-reload
+sudo systemctl enable decision-tree-api
+sudo systemctl restart decision-tree-api
+sudo systemctl status decision-tree-api --no-pager -l
+curl -i http://127.0.0.1:5000/api/health
+```
+
+The template starts /bin/bash .../start.sh. Do not add EnvironmentFile=.env:
+start.sh owns loading/quoting consistently, including inline comments. Do not add
+ExecStartPre calls to stop.sh, port-killing commands, or Bash parameter defaults
+such as ${PORT:-5000} directly to ExecStart. systemd does not run those as a shell.
+
+Expected status: active (running), with a successful health check. A brief start
+is normal; activating (auto-restart) with Result: exit-code means a failure loop.
+Check:
+
+```bash
+sudo journalctl -u decision-tree-api -n 60 --no-pager
+```
+
+Review logs locally before sharing: the existing application can log data or hash
+fragments. No systemd pre-start command should stop/disable the service itself.
+
+## 7. Build the frontend and configure nginx
+
+```bash
+cd ~/project_iDT_2/frontend/tree-forge-ui
+npm ci
+VITE_API_BASE_URL=/api npm run build
+test -f dist/index.html
+```
+
+Serve built assets from /var/www so nginx does not need access to your private
+home directory. Repeat the copy whenever rebuilding the frontend:
+
+```bash
+sudo mkdir -p /var/www/decision-tree
+sudo cp -a ~/project_iDT_2/frontend/tree-forge-ui/dist/. /var/www/decision-tree/
+sudo find /var/www/decision-tree -type d -exec chmod 755 {} +
+sudo find /var/www/decision-tree -type f -exec chmod 644 {} +
+sudo cp ~/project_iDT_2/backend/nginx.conf.example /etc/nginx/sites-available/decision-tree
+sudo nano /etc/nginx/sites-available/decision-tree
+# Confirm root /var/www/decision-tree; and proxy_pass http://127.0.0.1:5000;
+sudo ln -sfn /etc/nginx/sites-available/decision-tree /etc/nginx/sites-enabled/decision-tree
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+The nginx template permits 600 MB request bodies and uses 300-second proxy
+timeouts. Keep those consistent with MAX_UPLOAD_SIZE and GUNICORN_TIMEOUT.
+Do not expose Gunicorn's port through the EC2 security group.
+
+```bash
+curl -i http://127.0.0.1/api/health
+curl -I http://127.0.0.1/
+```
+
+Open http://YOUR_PUBLIC_IP, log in, upload CSV, set target/types, and build a tree.
+For HTTPS with a domain pointing at the instance:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d yourdomain.com
+# Change CORS_ORIGINS in .env to https://yourdomain.com, then:
+sudo systemctl restart decision-tree-api
+```
+
+## 8. Operations and updates
+
+```bash
+sudo systemctl status decision-tree-api --no-pager -l
+sudo journalctl -u decision-tree-api -f
+sudo systemctl restart decision-tree-api
+sudo systemctl stop decision-tree-api
+```
+
+stop.sh stops the systemd service without disabling boot startup. For manual
+processes it uses this checkout's PID file and verifies the process before TERM.
+It never kills all Gunicorn processes or every process using port 5000. Legacy
+manual runs without a PID file should be stopped with Ctrl+C in their terminal.
+
+For an update:
 
 ```bash
 cd ~/project_iDT_2
 git pull
-
-# Backend: reinstall deps if requirements changed, then restart
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
-sudo systemctl restart decision-tree-api
-
-# Frontend: rebuild
-cd ../frontend/tree-forge-ui
-VITE_API_BASE_URL=/api npm run build
-sudo systemctl reload nginx
-```
-
-Restarting the backend clears the per-worker in-memory DataFrame caches, but **not**
-user state — sessions live in Redis and frames live in `df_store/`, so active users
-keep their work across a restart (subject to `SESSION_TTL_SECONDS`).
-
----
-
-## Operations cheat sheet
-
-```bash
-# Backend logs
-sudo journalctl -u decision-tree-api -f
-
-# Restart / stop backend
-sudo systemctl restart decision-tree-api
 sudo systemctl stop decision-tree-api
-
-# nginx logs and reload
-sudo tail -f /var/log/nginx/error.log
-sudo systemctl reload nginx
-
-# Redis
-redis-cli ping
-redis-cli keys 'session:*'          # live sessions
-redis-cli info memory
-
-# DataFrame store usage
-du -sh ~/project_iDT_2/backend/df_store
+cd backend
+./deploy.sh
+# Do not replace .env or rerun user setup unless changing credentials.
+# If this update changes the service template, install it again and daemon-reload.
+sudo systemctl restart decision-tree-api
+curl -i http://127.0.0.1:5000/api/health
 ```
 
-### What to monitor
+Rebuild/copy the frontend separately if its code changed. Restarting workers clears
+in-process caches, not the metadata in Redis or Parquet files on disk (subject to
+session expiry). One workspace exists per username. The frontend currently clears
+local credentials on logout; backend /api/logout performs the explicit workspace
+purge. Do not assume the browser logout button has deleted the stored workspace.
 
-- **Disk** on the EBS volume — heavy parquet frames accumulate; the cleanup sweep
-  removes orphans, but confirm free space.
-- **Redis memory** — session metadata is small, but watch it under load.
-- **Worker memory** — `WEB_CONCURRENCY × DF_CACHE_MAX_BYTES` is the cache ceiling;
-  keep it under instance RAM.
-
----
-
-## Phase 2 (future, not required now) — horizontal scale
-
-The code is designed so scaling out is configuration, not a rewrite:
-
-- Move Redis to **ElastiCache**: point `REDIS_HOST` at the ElastiCache endpoint.
-- Move DataFrames to **S3**: set `DF_STORE_BACKEND=s3` with `DF_S3_BUCKET` /
-  `DF_S3_PREFIX` (the S3 store backend is a Phase-2 item and must be implemented
-  before enabling).
-- Run multiple instances behind an Application Load Balancer; optionally enable
-  sticky sessions so a user benefits from a warm per-instance DataFrame cache.
-
----
+Monitor EBS space, Redis memory, worker RAM, request duration and disk permissions.
+The cleanup scheduler removes orphaned Parquet datasets after session expiry;
+raw uploaded CSVs under uploads/ have a separate lifetime and need operational
+retention management. Keep backups of settings and required source datasets.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| API returns **503 "Session store unavailable"** | Redis not running / wrong `REDIS_HOST`/`REDIS_PASSWORD` | `sudo systemctl status redis-server`; `redis-cli ping`; check `.env` |
-| API returns **400 "Session data expired, please re-upload"** | The referenced parquet file is gone (TTL expiry/cleanup) | Expected after logout/timeout — re-upload |
-| API returns **413** on upload | Body exceeds the cap | Confirm `MAX_UPLOAD_SIZE` in `.env` and `client_max_body_size 600M` in nginx |
-| Frontend loads but API calls fail (CORS) | `CORS_ORIGINS` doesn't match the URL users hit | Set `CORS_ORIGINS` to your IP/domain; restart backend |
-| nginx **500 / Permission denied** serving the site | `/home/ubuntu` is `700` | `sudo chmod 755 /home/ubuntu` (Step 7) |
-| Can't reach the site from a browser | Security Group missing port 80 | Allow inbound HTTP (80) from 0.0.0.0/0 |
-| Backend won't start | bad `.env`, port in use, missing deps | `sudo journalctl -u decision-tree-api -n 50`; see `backend/DEPLOYMENT.md` |
+| Symptom | Action |
+| --- | --- |
+| pandas metadata-generation-failed / Python 3.14 / compiler killed | Recreate venv with Python 3.12; use the recovery steps above. |
+| export: '#' or '24h': not a valid identifier | Install the updated start.sh; it sources .env without xargs. |
+| Listening / Booting worker and no shell prompt | Normal foreground operation; use another SSH session for curl. |
+| activating (auto-restart), exit-code | Read journalctl; install the corrected service template and daemon-reload. |
+| Address already in use | Stop the manual instance or existing service; inspect sudo ss -ltnp. Do not kill arbitrary listeners. |
+| Wrong username/password | Use scripts/check_login.py below; reset the intended user and restart. |
+| Redis 503 | Check redis-server, REDIS_HOST/PORT/PASSWORD and redis-cli ping. |
+| Session data expired (400) | Upload the dataset again; check TTL and df_store availability. |
+| Oversized upload (413) | Align nginx client_max_body_size and MAX_UPLOAD_SIZE. |
+| Worker timeout | Tune GUNICORN_TIMEOUT and proxy timeouts to measured workload. |
+| nginx 500 / permission denied | Serve assets from /var/www; check root and nginx error log. |
+| S3 access denied | Check role, bucket/prefix policy, region, KMS and overriding static credentials. |
 
-For detailed, script-assisted troubleshooting (port conflicts, npm/build errors,
-nginx permission deep-dives), see **`backend/DEPLOYMENT.md`**.
+Safe login diagnostic (prompts normally; prints no token or hash):
+
+```bash
+cd ~/project_iDT_2/backend
+venv/bin/python scripts/check_login.py
+```
+
+- Password matches .env: False / API 401: wrong username/password, unsupported or
+  damaged hash. Reset via ./setup_user_password.sh USER --reset.
+- True / API 401: service environment differs; check quoting, the script path,
+  old EnvironmentFile settings, then restart.
+- True / API 200: direct backend login works; check the browser's API URL and nginx.
+- A connection error or 5xx needs service/configuration diagnosis.
+
+Never paste passwords, JWT secrets, access keys, tokens or stored hashes into chat.
