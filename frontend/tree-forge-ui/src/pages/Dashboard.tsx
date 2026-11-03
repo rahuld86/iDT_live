@@ -1,12 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, Plus, BarChart3 } from "lucide-react";
-import topPanel from "@/assets/top_panel.png";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import ImportTreeDialog from "@/components/ImportTreeDialog";
 import { apiService } from "@/services/api";
-import { authService } from "@/services/authService";
 import { useToast } from "@/hooks/use-toast";
 
 const Dashboard = () => {
@@ -75,31 +73,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-subtle">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-sm border-b border-border shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <h1 className="mr-4 h-12 w-52 sm:w-72 min-w-0">
-              <img
-                src={topPanel}
-                alt="Bosco Decision Trees"
-                className="h-full w-full object-cover"
-              />
-            </h1>
-            <Button 
-              variant="outline" 
-              onClick={() => {
-                authService.logout();
-                navigate("/");
-              }}
-            >
-              Sign Out
-            </Button>
-          </div>
-        </div>
-      </header>
-
+    <div className="min-h-[calc(100vh-var(--app-header-height))] bg-gradient-subtle">
       {/* Main Content */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="text-center mb-12">

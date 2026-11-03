@@ -949,7 +949,7 @@ FROM your_table;
   };
 
   return (
-    <div className="min-h-screen bg-gradient-subtle flex flex-col">
+    <div className="min-h-[calc(100vh-var(--app-header-height))] bg-gradient-subtle flex flex-col">
       {/* Header */}
       <div className="bg-gradient-to-r from-red-50 to-red-100/80 backdrop-blur-sm border-b border-red-200 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
