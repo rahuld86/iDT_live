@@ -696,18 +696,19 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
           className="drop-shadow-sm"
         />
 
-        {/* The custom label is the title; unlabeled cards use their node number. */}
+        {/* Keep the node number on the left, with an optional label on the right. */}
         <text
           x={x + 12} y={y + 22}
           fontSize={12} fontWeight={600}
-          fill={nodeData.node_label ? '#800020' : '#334155'}
+          fill="#334155"
         >
-          <title>{nodeData.node_label || `Node ${nodeData.node_number}`}</title>
-          {truncateText(nodeData.node_label || `Node ${nodeData.node_number}`, nodeData.node_label ? 104 : 176, 12)}
+          <title>{`Node ${nodeData.node_number}`}</title>
+          {truncateText(`Node ${nodeData.node_number}`, nodeData.node_label ? 80 : 176, 12)}
         </text>
         {nodeData.node_label && (
-          <text x={x + 188} y={y + 22} textAnchor="end" fontSize={9} fill="#64748b">
-            NODE {nodeData.node_number}
+          <text x={x + 188} y={y + 22} textAnchor="end" fontSize={11} fontWeight={600} fill="#800020">
+            <title>{nodeData.node_label}</title>
+            {truncateText(nodeData.node_label, 84, 11)}
           </text>
         )}
 
