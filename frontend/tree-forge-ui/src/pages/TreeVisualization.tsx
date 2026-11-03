@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { AppHeaderActions } from "@/components/AppLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { ZoomIn, ZoomOut, Palette, Camera, Download, Code, ChevronDown, FileText, Database, BarChart3 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -950,70 +951,61 @@ FROM your_table;
 
   return (
     <div className="min-h-[calc(100vh-var(--app-header-height))] bg-gradient-subtle flex flex-col">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-red-50 to-red-100/80 backdrop-blur-sm border-b border-red-200 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-4">
-              <h1 className="text-xl font-semibold text-foreground">Decision Tree Visualization</h1>
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              <Button variant="outline" size="sm" onClick={handleZoomOut}>
-                <ZoomOut className="h-4 w-4" />
+      <AppHeaderActions>
+        <div role="toolbar" aria-label="Tree visualization controls" className="flex w-max min-w-full items-center justify-end gap-1 [&>button]:h-8 [&>button]:px-2 [&>button]:text-xs [&>button]:gap-1 [&_svg]:!size-3.5">
+          <Button variant="outline" size="sm" aria-label="Zoom out" title="Zoom out" onClick={handleZoomOut}>
+            <ZoomOut className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="sm" aria-label="Zoom in" title="Zoom in" onClick={handleZoomIn}>
+            <ZoomIn className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExpandAll}>
+            Expand All
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleCollapseAll}>
+            Collapse All
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowColorSettings(true)}>
+            <Palette className="h-4 w-4" />
+            Colours
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowTreeAttributes(true)}>
+            <BarChart3 className="h-4 w-4" />
+            Tree Attributes
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="flex items-center gap-2">
+                <Download className="h-4 w-4" />
+                Export Tree
+                <ChevronDown className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="sm" onClick={handleZoomIn}>
-                <ZoomIn className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleExpandAll}>
-                Expand All
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleCollapseAll}>
-                Collapse All
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowColorSettings(true)}>
-                <Palette className="h-4 w-4 mr-2" />
-                Colours
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowTreeAttributes(true)}>
-                <BarChart3 className="h-4 w-4 mr-2" />
-                Tree Attributes
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="flex items-center gap-2">
-                    <Download className="h-4 w-4" />
-                    Export Tree
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={handleSnapshot} className="flex items-center gap-2">
-                    <Camera className="h-4 w-4" />
-                    Snapshot
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportPython} className="flex items-center gap-2">
-                    <Code className="h-4 w-4" />
-                    Python Code
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportSQL} className="flex items-center gap-2">
-                    <Database className="h-4 w-4" />
-                    SQL Code
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportNodeReport} className="flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Node Report
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleSaveTree} className="flex items-center gap-2">
-                    <Download className="h-4 w-4" />
-                    Save Tree
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={handleSnapshot} className="flex items-center gap-2">
+                <Camera className="h-4 w-4" />
+                Snapshot
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportPython} className="flex items-center gap-2">
+                <Code className="h-4 w-4" />
+                Python Code
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportSQL} className="flex items-center gap-2">
+                <Database className="h-4 w-4" />
+                SQL Code
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportNodeReport} className="flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                Node Report
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleSaveTree} className="flex items-center gap-2">
+                <Download className="h-4 w-4" />
+                Save Tree
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </div>
+      </AppHeaderActions>
 
       {/* Main Content */}
       <div className="flex-1 w-full h-full">
