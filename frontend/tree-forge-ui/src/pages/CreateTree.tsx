@@ -50,7 +50,6 @@ const CreateTree = () => {
   useEffect(() => {
     const state = location.state as any;
     if (state?.isImported && state?.uploadedData) {
-      console.log('Imported CSV data detected:', state.uploadedData);
       setUploadedData(state.uploadedData);
       setCurrentStep("preview");
     }
@@ -129,14 +128,10 @@ const CreateTree = () => {
       // Determine what to send to the API
       const fileToUpload = selectedFile || fileUrl;
       
-      console.log('Attempting to upload:', fileToUpload);
-      console.log('Selected file:', selectedFile);
-      console.log('File URL:', fileUrl);
       
       // Call the /api/upload endpoint using the API service
       const data = await apiService.uploadFile(fileToUpload);
       
-      console.log('API response received:', data);
       
       // Transform the API response to match our DataPreviewData interface
       const transformedData: DataPreviewData = {
@@ -234,7 +229,6 @@ const CreateTree = () => {
       setIsLoading(true);
       try {
         await apiService.setTarget(selectedTarget, selectedRegressionFlag);
-        console.log('Target variable set successfully:', selectedTarget, 'Regression flag:', selectedRegressionFlag);
         
         toast({
           title: "Target Variable Set",
@@ -256,7 +250,6 @@ const CreateTree = () => {
       setIsLoadingDataTypes(true);
       try {
         const typesFromAPI = await apiService.getTypes();
-        console.log('Data types from API:', typesFromAPI);
         
         // Update data types with API response
         setDataTypes(typesFromAPI);
@@ -282,7 +275,6 @@ const CreateTree = () => {
       setIsLoading(true);
       try {
         const result = await apiService.keepVariables(dataTypes);
-        console.log('Variables kept successfully:', result);
         
         toast({
           title: "Data Types Saved",
@@ -319,14 +311,11 @@ const CreateTree = () => {
         monotonic: safeParseInt(treeAttributes.monotonicSplits, 0)
       };
       
-      console.log('Sending hyperparameters to API:', hyperparameters);
       await apiService.defineHyperparameters(hyperparameters);
       
-      console.log('Hyperparameters defined successfully');
       
       // Then call /api/initTree
       const initResult = await apiService.initTree();
-      console.log('Tree initialized successfully:', initResult);
       
       toast({
         title: "Tree Initialized",
@@ -363,18 +352,14 @@ const CreateTree = () => {
         monotonic: safeParseInt(treeAttributes.monotonicSplits, 0)
       };
       
-      console.log('Sending hyperparameters to API:', hyperparameters);
       await apiService.defineHyperparameters(hyperparameters);
       
-      console.log('Hyperparameters defined successfully');
       
       // Then call /api/initTree
       await apiService.initTree();
-      console.log('Tree initialized successfully');
       
       // Finally call /api/autoTree
       const autoTreeResult = await apiService.autoTree();
-      console.log('Auto tree built successfully:', autoTreeResult);
       
       toast({
         title: "Decision Tree Built",

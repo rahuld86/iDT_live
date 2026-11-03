@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { hierarchy, tree, cluster } from 'd3-hierarchy';
-import { select } from 'd3-selection';
+import { hierarchy } from 'd3-hierarchy';
 import { NodeMasterData, ColorConfig } from '@/types';
 import TreeNodeContextMenu from './TreeNodeContextMenu';
 import ForceSplitDialog from './ForceSplitDialog';
@@ -154,7 +153,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     }
 
     try {
-      console.log(`Force split completed for node ${forceSplitDialog.nodeNumber} with variable: ${selectedVariable}`);
       
       // Close the dialog
       handleForceSplitDialogClose();
@@ -174,7 +172,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     }
 
     try {
-      console.log(`Edit split completed for node ${editSplitDialog.nodeNumber} with variable: ${selectedVariable}`);
       
       // Close the dialog
       handleEditSplitDialogClose();
@@ -188,7 +185,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
   };
 
   const handleContextMenuAction = async (action: string) => {
-    console.log(`Context menu action: ${action} on node ${contextMenu.nodeNumber}`);
     
     if (!contextMenu.nodeNumber) {
       console.error('No node number available for action');
@@ -199,17 +195,12 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     switch (action) {
       case 'auto-train':
         try {
-          console.log(`Starting auto train for node ${contextMenu.nodeNumber}`);
           
           // First call delSubTree
-          console.log('Calling /api/delSubTree...');
           const delResponse = await apiService.delSubTree(contextMenu.nodeNumber);
-          console.log('delSubTree response:', delResponse);
           
           // Then call autoTrainSubTree
-          console.log('Calling /api/autoTrainSubTree...');
           const trainResponse = await apiService.autoTrainSubTree(contextMenu.nodeNumber);
-          console.log('autoTrainSubTree response:', trainResponse);
           
         } catch (error) {
           console.error('Error during auto train:', error);
@@ -217,19 +208,15 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         } finally {
           // Always refresh the tree data to show the new structure
           if (onTreeRefresh) {
-            console.log('Refreshing tree data...');
             onTreeRefresh();
           }
         }
         break;
       case 'find-split':
         try {
-          console.log(`Starting find split for node ${contextMenu.nodeNumber}`);
           
           // Call findSplit API
-          console.log('Calling /api/findSplit...');
           const findSplitResponse = await apiService.findSplit(contextMenu.nodeNumber);
-          console.log('findSplit response:', findSplitResponse);
           
         } catch (error) {
           console.error('Error during find split:', error);
@@ -237,7 +224,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         } finally {
           // Always refresh the tree data to show the updated structure
           if (onTreeRefresh) {
-            console.log('Refreshing tree data after find split...');
             onTreeRefresh();
           }
         }
@@ -275,12 +261,9 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         break;
       case 'delete-subtree':
         try {
-          console.log(`Starting delete sub tree for node ${contextMenu.nodeNumber}`);
           
           // Call delSubTree API
-          console.log('Calling /api/delSubTree...');
           const delResponse = await apiService.delSubTree(contextMenu.nodeNumber);
-          console.log('delSubTree response:', delResponse);
           
         } catch (error) {
           console.error('Error during delete sub tree:', error);
@@ -288,16 +271,13 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         } finally {
           // Always refresh the tree data to show the updated structure
           if (onTreeRefresh) {
-            console.log('Refreshing tree data after delete...');
             onTreeRefresh();
           }
         }
         break;
       case 'copy-subtree':
         try {
-          console.log(`Copying sub tree from node ${contextMenu.nodeNumber}`);
           setCopiedNodeNumber(contextMenu.nodeNumber);
-          console.log(`Node ${contextMenu.nodeNumber} copied to memory`);
         } catch (error) {
           console.error('Error during copy sub tree:', error);
         }
@@ -309,17 +289,12 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
             return;
           }
           
-          console.log(`Pasting sub tree from node ${copiedNodeNumber} to node ${contextMenu.nodeNumber}`);
           
           // First call delSubTree to clear the target node's existing subtree
-          console.log('Calling /api/delSubTree...');
           const delResponse = await apiService.delSubTree(contextMenu.nodeNumber);
-          console.log('delSubTree response:', delResponse);
           
           // Then call copyNode API to paste the copied subtree
-          console.log('Calling /api/copyNode...');
           const copyNodeResponse = await apiService.copyNode(copiedNodeNumber, contextMenu.nodeNumber);
-          console.log('copyNode response:', copyNodeResponse);
           
         } catch (error) {
           console.error('Error during paste sub tree:', error);
@@ -327,13 +302,11 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         } finally {
           // Always refresh the tree data to show the updated structure
           if (onTreeRefresh) {
-            console.log('Refreshing tree data after paste...');
             onTreeRefresh();
           }
         }
         break;
       default:
-        console.log(`Unknown action: ${action}`);
     }
   };
 

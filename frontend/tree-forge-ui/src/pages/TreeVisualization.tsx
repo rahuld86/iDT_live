@@ -12,7 +12,6 @@ import { ColorConfig, TreeAttributes } from "@/types";
 import { apiService } from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
 import html2canvas from 'html2canvas';
-import { saveAs } from 'file-saver';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -539,7 +538,6 @@ FROM your_table;
       setIsLoading(true);
       const response = await apiService.getTreeData();
       setNodeMaster(response.node_master);
-      console.log('Tree data loaded:', response.node_master);
       
       // Expand all nodes by default to show the complete tree
       const allNodeNumbers = response.node_master.map(node => node.node_number);
@@ -561,7 +559,6 @@ FROM your_table;
     try {
       const diagnostics = await apiService.getImportDiagnostics();
       setRegressionFlag(diagnostics.hyperparameters.regression_flag || 0);
-      console.log('Regression flag loaded:', diagnostics.hyperparameters.regression_flag);
     } catch (error) {
       console.error('Error fetching regression flag:', error);
       // Default to classification if we can't fetch the flag
@@ -583,7 +580,6 @@ FROM your_table;
       const allNodeNumbers = importedData.map((node: NodeMasterData) => node.node_number);
       setExpandedNodes(new Set(allNodeNumbers));
       
-      console.log('Imported tree data loaded:', importedData);
     } else {
       // Fetch tree data from API as usual
       fetchTreeData();
@@ -804,7 +800,6 @@ FROM your_table;
   };
 
   const handleSaveTree = () => {
-    console.log("Opening export dialog for save tree");
     setExportType("save_tree");
     setExportDialogOpen(true);
   };
@@ -862,7 +857,6 @@ FROM your_table;
           return;
         } catch (err) {
           // User cancelled or error occurred, fall back to download
-          console.log('Save cancelled or failed:', err);
         }
       }
       

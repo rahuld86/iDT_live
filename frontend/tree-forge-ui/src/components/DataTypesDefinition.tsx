@@ -5,7 +5,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { CheckSquare, Square } from "lucide-react";
 
 interface DataTypesDefinitionProps {
   columnNames: string[];

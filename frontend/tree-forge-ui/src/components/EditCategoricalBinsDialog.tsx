@@ -204,12 +204,9 @@ const EditCategoricalBinsDialog: React.FC<EditCategoricalBinsDialogProps> = ({
         editedBins.filter(bin => bin.values.length > 0)
       );
 
-      console.log('Submitting categorical edit split:', renumberedBins);
       
       // First, delete any existing subtree
-      console.log('Calling /api/delSubTree...');
       await apiService.delSubTree(nodeNumber);
-      console.log('delSubTree completed');
       
       // Prepare the splits data for the API call
       const splitsForAPI = renumberedBins.map((bin, index) => {
@@ -226,7 +223,6 @@ const EditCategoricalBinsDialog: React.FC<EditCategoricalBinsDialogProps> = ({
       });
       
       // Call the addNode API
-      console.log('Calling /api/addNode...');
       const response = await apiService.addNode(nodeNumber, variableName, splitsForAPI);
       
       if (response.success) {

@@ -1,9 +1,4 @@
-"""Pytest configuration and shared fixtures for the backend test suite.
-
-This placeholder makes ``project_iDT_2/backend`` importable from tests and
-provides a home for shared fixtures (fakeredis clients, temporary
-DataFrameStore directories, Flask test clients) added in later tasks.
-"""
+"""Make backend modules importable when running the regression test suite."""
 
 import os
 import sys

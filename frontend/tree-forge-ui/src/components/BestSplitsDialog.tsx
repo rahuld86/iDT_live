@@ -10,7 +10,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
@@ -288,12 +287,9 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
 
   const handleSubmit = async () => {
     try {
-      console.log('Submitting force split with modified bounds:', bestSplits);
       
       // First, delete any existing subtree
-      console.log('Calling /api/delSubTree...');
       await apiService.delSubTree(nodeNumber);
-      console.log('delSubTree completed');
       
       // Ensure at least one bin is selected for missing, default to bin 1 (index 0)
       const finalMissingSelection = selectedMissingBin >= 0 ? selectedMissingBin : 0;
@@ -308,7 +304,6 @@ const BestSplitsDialog: React.FC<BestSplitsDialogProps> = ({
       }));
       
       // Call the addNode API
-      console.log('Calling /api/addNode...');
       const response = await apiService.addNode(nodeNumber, variableName, splitsForAPI);
       
       if (response.success) {

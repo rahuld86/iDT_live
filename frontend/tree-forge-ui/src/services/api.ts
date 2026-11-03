@@ -35,8 +35,6 @@ class ApiService {
   ): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
     
-    console.log(`Making API request to: ${url}`);
-    console.log('Request options:', options);
     
     // Get auth token
     const token = this.getAuthToken();
@@ -67,8 +65,6 @@ class ApiService {
     try {
       const response = await fetch(url, config);
       
-      console.log(`Response status: ${response.status}`);
-      console.log(`Response headers:`, response.headers);
 
       // Handle 401 Unauthorized - token invalid or expired
       if (response.status === 401) {
@@ -91,11 +87,9 @@ class ApiService {
       try {
         // Read response as text first to avoid "Response body is already used" error
         const responseText = await response.text();
-        console.log('Raw response text:', responseText);
         
         // Parse the JSON
         data = JSON.parse(responseText);
-        console.log('API response data:', data);
       } catch (jsonError) {
         console.error('JSON parsing error:', jsonError);
         throw new Error(`Invalid JSON response from server: ${jsonError.message}`);
@@ -120,8 +114,6 @@ class ApiService {
       formData.append('file', file);
       
       const url = `${API_BASE_URL}/upload`;
-      console.log(`Making file upload request to: ${url}`);
-      console.log('Uploading file:', file.name, 'Size:', file.size, 'bytes');
       
       // Get auth token for file uploads
       const token = this.getAuthToken();
@@ -136,7 +128,6 @@ class ApiService {
         body: formData, // Use FormData for file uploads (don't set Content-Type header)
       });
       
-      console.log(`File upload response status: ${response.status}`);
       
       // Handle 401 Unauthorized
       if (response.status === 401) {
@@ -156,7 +147,6 @@ class ApiService {
       let data;
       try {
         data = await response.json();
-        console.log('File upload response data:', data);
       } catch (jsonError) {
         console.error('JSON parsing error in file upload:', jsonError);
         // Clone the response to read the text without consuming the original stream

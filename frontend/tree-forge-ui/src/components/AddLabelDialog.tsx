@@ -61,7 +61,6 @@ const AddLabelDialog: React.FC<AddLabelDialogProps> = ({
     try {
       setIsSubmitting(true);
       
-      console.log(`${existingLabel ? 'Updating' : 'Adding'} label "${label}" to node ${nodeNumber}`);
       const response = await apiService.labelNode(nodeNumber, label.trim());
       
       if (response.node_master) {

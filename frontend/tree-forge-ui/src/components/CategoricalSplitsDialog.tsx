@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
@@ -135,12 +134,9 @@ const CategoricalSplitsDialog: React.FC<CategoricalSplitsDialogProps> = ({
 
   const handleSubmit = async () => {
     try {
-      console.log('Submitting categorical force split:', categoricalBins);
       
       // First, delete any existing subtree
-      console.log('Calling /api/delSubTree...');
       await apiService.delSubTree(nodeNumber);
-      console.log('delSubTree completed');
       
       // Prepare the splits data for the API call
       const splitsForAPI = categoricalBins.map((bin, index) => {
@@ -157,7 +153,6 @@ const CategoricalSplitsDialog: React.FC<CategoricalSplitsDialogProps> = ({
       });
       
       // Call the addNode API
-      console.log('Calling /api/addNode...');
       const response = await apiService.addNode(nodeNumber, variableName, splitsForAPI);
       
       if (response.success) {

@@ -376,12 +376,9 @@ const EditSplitDialog: React.FC<EditSplitDialogProps> = ({
 
   const handleSubmit = async () => {
     try {
-      console.log('Submitting edited splits:', currentSplits);
       
       // First, delete any existing subtree
-      console.log('Calling /api/delSubTree...');
       await apiService.delSubTree(nodeNumber);
-      console.log('delSubTree completed');
       
       // Ensure at least one bin is selected for missing, default to bin 1 (index 0)
       const finalMissingSelection = selectedMissingBin >= 0 ? selectedMissingBin : 0;
@@ -395,7 +392,6 @@ const EditSplitDialog: React.FC<EditSplitDialogProps> = ({
       }));
       
       // Call the addNode API
-      console.log('Calling /api/addNode...');
       const response = await apiService.addNode(nodeNumber, variableName, splitsForAPI);
       
       if (response.success) {
