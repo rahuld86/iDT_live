@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, Plus, BarChart3 } from "lucide-react";
-import { RedBoxLogo } from "@/components/RedBoxLogo";
+import topPanel from "@/assets/top_panel.png";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import ImportTreeDialog from "@/components/ImportTreeDialog";
@@ -80,14 +80,13 @@ const Dashboard = () => {
       <header className="bg-white/80 backdrop-blur-sm border-b border-border shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3">
-              <div className="h-8 w-8 rounded-lg bg-gradient-primary flex items-center justify-center">
-                <RedBoxLogo size={20} className="text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-semibold text-foreground">Decision Tree Builder</h1>
-              </div>
-            </div>
+            <h1 className="mr-4 h-12 w-52 sm:w-72 min-w-0">
+              <img
+                src={topPanel}
+                alt="Bosco Decision Trees"
+                className="h-full w-full object-cover"
+              />
+            </h1>
             <Button 
               variant="outline" 
               onClick={() => {
