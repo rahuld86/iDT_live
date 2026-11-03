@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { indexChildren } from "@/lib/tree-utils";
 import { AppHeaderActions } from "@/components/AppLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { ZoomIn, ZoomOut, Palette, Camera, Download, Code, ChevronDown, FileText, Database, BarChart3, Save } from "lucide-react";
@@ -85,6 +86,8 @@ const TreeVisualization = () => {
       return a.node_number - b.node_number;
     });
 
+    const childrenByParent = indexChildren(sortedNodes);
+
     // Get all unique variables used in the tree
     const variables = [...new Set(sortedNodes
       .filter(node => node.variable !== 'Parent')
@@ -113,7 +116,7 @@ ${variables.map(variable => `    ${variable.toLowerCase()} = row['${variable}']`
 
     // Generate the tree structure recursively
     const generateNodeLogic = (parentNodeNumber: number, indentLevel: number = 0): string => {
-      const children = sortedNodes.filter(node => node.parent_node === parentNodeNumber);
+      const children = childrenByParent.get(parentNodeNumber) || [];
       
       if (children.length === 0) return '';
       
@@ -263,6 +266,8 @@ if __name__ == "__main__":
       return a.node_number - b.node_number;
     });
 
+    const childrenByParent = indexChildren(sortedNodes);
+
     // Get all unique variables used in the tree
     const variables = [...new Set(sortedNodes
       .filter(node => node.variable !== 'Parent')
@@ -287,7 +292,7 @@ SELECT
 
     // Generate the tree structure recursively for SQL
     const generateSQLNodeLogic = (parentNodeNumber: number, indentLevel: number = 1): string => {
-      const children = sortedNodes.filter(node => node.parent_node === parentNodeNumber);
+      const children = childrenByParent.get(parentNodeNumber) || [];
       
       if (children.length === 0) return '';
       

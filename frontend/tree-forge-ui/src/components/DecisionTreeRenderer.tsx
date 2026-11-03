@@ -7,6 +7,7 @@ import ForceSplitDialog from './ForceSplitDialog';
 import EditSplitDialog from './EditSplitDialog';
 import AddLabelDialog from './AddLabelDialog';
 import { apiService } from '@/services/api';
+import { indexChildren, truncateText } from '@/lib/tree-utils';
 
 interface TreeNode {
   data: NodeMasterData;
@@ -343,23 +344,22 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     return Math.max(0, Math.min(1, norm));
   };
 
+  const primaryRgb = useMemo(() => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(colorConfig.color1);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 255, g: 255, b: 255 };
+  }, [colorConfig.color1]);
+
   // Helper function to calculate node color based on configuration and metric
   const getNodeColor = (rawValue: number) => {
     const value = normalizeValue(rawValue);
-    // Helper function to convert hex to rgba
-    const hexToRgb = (hex: string) => {
-      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-      return result ? {
-        r: parseInt(result[1], 16),
-        g: parseInt(result[2], 16),
-        b: parseInt(result[3], 16)
-      } : { r: 255, g: 255, b: 255 };
-    };
 
     switch (colorConfig.mode) {
       case 'solid':
-        const solidRgb = hexToRgb(colorConfig.color1);
-        return `rgba(${solidRgb.r}, ${solidRgb.g}, ${solidRgb.b}, 0.5)`; // 50% transparency
+        return `rgba(${primaryRgb.r}, ${primaryRgb.g}, ${primaryRgb.b}, 0.5)`; // 50% transparency
       
       case 'split':
         return {
@@ -369,14 +369,15 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         };
       
       case 'gradient':
-        const gradientRgb = hexToRgb(colorConfig.color1);
         const transparency = 0.1 + (value * 0.8); // Varies from 0.1 to 0.9 based on normalized value
-        return `rgba(${gradientRgb.r}, ${gradientRgb.g}, ${gradientRgb.b}, ${transparency})`;
+        return `rgba(${primaryRgb.r}, ${primaryRgb.g}, ${primaryRgb.b}, ${transparency})`;
       
       default:
         return '#ffffff';
     }
   };
+
+  const childrenByParent = useMemo(() => indexChildren(nodeMaster), [nodeMaster]);
 
   // Build tree structure from node_master data with expand/collapse filtering
   const treeStructure = useMemo(() => {
@@ -392,9 +393,7 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
       
       let children: TreeNode[] = [];
       if (isExpanded) {
-        children = nodeMaster
-          .filter(child => child.parent_node === nodeData.node_number)
-          .map(buildTree);
+        children = (childrenByParent.get(nodeData.node_number) || []).map(buildTree);
       }
 
       return {
@@ -404,7 +403,7 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     };
 
     return buildTree(rootNode);
-  }, [nodeMaster, expandedNodes]);
+  }, [nodeMaster, expandedNodes, childrenByParent]);
 
   // Use recursive subtree layout with dedicated space allocation
   const layoutData = useMemo(() => {
@@ -461,12 +460,11 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     
     // Now perform bottom-to-top spacing adjustment
     const maxDepth = root.height;
-    const levelGroups: any[][] = [];
+    const allNodes = root.descendants();
+    const levelGroups: any[][] = Array.from({ length: maxDepth + 1 }, () => []);
     
     // Group nodes by depth (bottom to top)
-    for (let i = maxDepth; i >= 0; i--) {
-      levelGroups[i] = root.descendants().filter(d => d.depth === i);
-    }
+    for (const node of allNodes) levelGroups[node.depth].push(node);
     
     // Bottom-to-top pass: adjust spacing starting from leaf nodes
     for (let level = maxDepth; level >= 0; level--) {
@@ -512,7 +510,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     }
     
     // Final pass: ensure no overlaps with generous spacing
-    const allNodes = root.descendants();
     for (let i = 0; i < allNodes.length; i++) {
       for (let j = i + 1; j < allNodes.length; j++) {
         const node1 = allNodes[i];
@@ -620,16 +617,6 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     return connections;
   };
 
-  // SVG text has no automatic ellipsis. Estimate width without depending on browser measurement.
-  const truncateText = (text: string, maxWidth: number, fontSize: number) => {
-    const widthOf = (value: string) => Array.from(value).reduce((width, char) =>
-      width + fontSize * (/[^\u0000-\u00ff]/.test(char) ? 1 : /[MW@%]/.test(char) ? 0.9 : /[il.,' :]/.test(char) ? 0.3 : 0.65), 0);
-    if (widthOf(text) <= maxWidth) return text;
-    const characters = Array.from(text);
-    while (characters.length && widthOf(characters.join('') + '…') > maxWidth) characters.pop();
-    return characters.join('') + '…';
-  };
-
   // Render individual node
   const renderNode = (node: any) => {
     if (node.x === undefined || node.y === undefined) return null;
@@ -640,7 +627,7 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
 
     const isLeaf = nodeData.leaf_flag;
     // Check if this node has children in the original nodeMaster data
-    const hasChildren = !isLeaf && nodeMaster.some(child => child.parent_node === nodeData.node_number);
+    const hasChildren = !isLeaf && childrenByParent.has(nodeData.node_number);
     const isExpanded = expandedNodes.has(nodeData.node_number);
     
     const eventRate = nodeData.event_rate || 0;
@@ -866,7 +853,7 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
           onClose={handleContextMenuClose}
           onAction={handleContextMenuAction}
           copiedNodeNumber={copiedNodeNumber}
-          isParentNode={contextMenu.nodeNumber ? nodeMaster.some(node => node.parent_node === contextMenu.nodeNumber) : false}
+          isParentNode={contextMenu.nodeNumber ? childrenByParent.has(contextMenu.nodeNumber) : false}
         />
 
       {/* Force Split Dialog */}

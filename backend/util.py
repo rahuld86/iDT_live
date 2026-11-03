@@ -678,8 +678,10 @@ def next_node_to_split(node_master, max_depth):
 
 def build_tree(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, mapper, regression_flag, monotonic, unique_var):
     X_col, node_master, node_datasets = init_setup(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches)
-    while next_node_to_split(node_master, max_depth) != 0:
+    while True:
         node_number = next_node_to_split(node_master, max_depth)
+        if node_number == 0:
+            break
         if unique_var == 1:
             var_list = track_parents(node_master, node_number)
         else:
@@ -697,7 +699,7 @@ def del_subtree(df, df_node, node_number):
         print(f"Available nodes: {list(df_copy['node_number'])}")
         raise ValueError(f"Node {node_number} not found in del_subtree")
     str_del = filtered_df['branch_str'].iloc[0]
-    df_copy['mark']=df_copy.apply(lambda x: 1 if (x.branch_str.startswith(str_del)) and (x.branch_str != str_del) else 0, axis=1)
+    df_copy['mark'] = (df_copy['branch_str'].str.startswith(str_del) & df_copy['branch_str'].ne(str_del)).astype(int)
     keep_list = df_copy[df_copy['mark'].isin([0])].node_number
     df_node_return = df_node[df_node['node_number'].isin(keep_list)].reset_index(drop=True)
     df_filtered = df_copy[df_copy['mark'].isin([0])].reset_index(drop=True)
@@ -711,7 +713,7 @@ def next_node_to_split_node(df, max_depth, node_number): ## df is node_master
         print(f"Available nodes: {list(df['node_number'])}")
         raise ValueError(f"Node {node_number} not found in next_node_to_split_node")
     str_del = filtered_df['branch_str'].iloc[0] ## identify the branch of the parent node to be split
-    df['mark']=df.apply(lambda x: 1 if x.branch_str.startswith(str_del) else 0, axis=1) ## mark node_master for the correct branch only
+    df['mark'] = df['branch_str'].str.startswith(str_del).astype(int) ## mark node_master for the correct branch only
     df_filtered = df[df['mark'].isin([1])] ## take only the marked nodes
     node_to_split = 0
     parent_nodes = set(df_filtered['parent_node'].values)
@@ -723,9 +725,11 @@ def next_node_to_split_node(df, max_depth, node_number): ## df is node_master
 
 def build_tree_node(input_path, event_flag, max_depth, min_node_split, min_leaf_size, max_branches, node_to_split, X_col, node_master, node_datasets, mapper, regression_flag):
     iteration_count = 0
-    while next_node_to_split_node(node_master, max_depth, node_to_split) != 0:
-        iteration_count += 1
+    while True:
         node_number = next_node_to_split_node(node_master, max_depth, node_to_split)
+        if node_number == 0:
+            break
+        iteration_count += 1
         node_master, node_datasets = split_node(node_number, min_leaf_size, max_branches, max_depth, min_node_split, X_col, node_master, node_datasets, event_flag, mapper, regression_flag, 0, [])
         if iteration_count > 10:  # Safety break to prevent infinite loops
             print("WARNING: Too many iterations, breaking loop")

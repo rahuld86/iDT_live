@@ -1,73 +1,57 @@
-# Welcome to your Lovable project
+# Bosco Decision Trees frontend
 
-## Project info
+React and TypeScript interface for building, inspecting, importing, and exporting decision trees.
 
-**URL**: https://lovable.dev/projects/418c149f-607c-4fa5-8df6-e400987b6acc
+Live frontend: [idt-ui.onrender.com](https://idt-ui.onrender.com).
 
-## How can I edit this code?
+## Local development
 
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/418c149f-607c-4fa5-8df6-e400987b6acc) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+Run these commands from `frontend/tree-forge-ui`:
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+npm ci
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+The development server is configured for port **8080**. Use the local URL printed by Vite.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Backend connection
 
-**Use GitHub Codespaces**
+The frontend reads `VITE_API_BASE_URL` at build time and defaults to `/api`.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+For a separate backend, create a local `.env.local` file in this directory:
 
-## What technologies are used for this project?
+```dotenv
+VITE_API_BASE_URL=http://localhost:5000/api
+```
 
-This project is built with:
+Point this value at the backend you are running, and allow the frontend origin in the backend's CORS configuration. Restart Vite after changing environment settings. Do not put credentials or secrets in frontend environment variables: they are included in the browser build.
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Build and preview
 
-## How can I deploy this project?
+```sh
+npm run build
+npm run preview
+```
 
-Simply open [Lovable](https://lovable.dev/projects/418c149f-607c-4fa5-8df6-e400987b6acc) and click on Share -> Publish.
+Production files are generated in `dist/`. Preview serves the built frontend; a working backend connection is still required.
 
-## Can I connect a custom domain to my Lovable project?
+`npm run lint` runs the configured ESLint checks. The project currently has existing lint and TypeScript diagnostics; a successful Vite build does not mean all static checks pass.
 
-Yes, you can!
+## Deployment
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+The live frontend is hosted on Render. Commit and push changes to the repository branch connected to the frontend service, then confirm that Render has successfully deployed that commit before checking the live app.
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Set `VITE_API_BASE_URL` in the build environment when the production API is hosted separately. Changing this value requires rebuilding the frontend. The host must serve `index.html` for frontend routes such as `/dashboard` and `/tree-visualization`.
+
+For the repository's separate server/nginx deployment instructions, see [DEPLOYMENT.md](../../DEPLOYMENT.md).
+
+## Source layout
+
+- `src/pages/`: login, dashboard, tree creation, and visualization pages.
+- `src/components/`: shared header, tree renderer, dialogs, and UI components.
+- `src/services/`: authentication and API requests.
+- `src/assets/`: application artwork and browser icon.
+- `src/types/`: shared TypeScript types.
+
+The frontend uses React, Vite, TypeScript, Tailwind CSS, shadcn/ui, and D3 hierarchy utilities.
