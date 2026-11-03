@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { AppHeaderActions } from "@/components/AppLayout";
 import { Card, CardContent } from "@/components/ui/card";
-import { ZoomIn, ZoomOut, Palette, Camera, Download, Code, ChevronDown, FileText, Database, BarChart3 } from "lucide-react";
+import { ZoomIn, ZoomOut, Palette, Camera, Download, Code, ChevronDown, FileText, Database, BarChart3, Save } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useState, useRef, useEffect } from "react";
 import DecisionTreeRenderer from "@/components/DecisionTreeRenderer";
@@ -973,6 +973,10 @@ FROM your_table;
             <BarChart3 className="h-4 w-4" />
             Tree Attributes
           </Button>
+          <Button variant="outline" size="sm" onClick={handleSaveTree}>
+            <Save className="h-4 w-4" />
+            Save Tree
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="flex items-center gap-2">
@@ -997,10 +1001,6 @@ FROM your_table;
               <DropdownMenuItem onClick={handleExportNodeReport} className="flex items-center gap-2">
                 <FileText className="h-4 w-4" />
                 Node Report
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleSaveTree} className="flex items-center gap-2">
-                <Download className="h-4 w-4" />
-                Save Tree
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
