@@ -49,8 +49,8 @@ const TreeVisualization = () => {
   const [showColorSettings, setShowColorSettings] = useState(false);
   const [showTreeAttributes, setShowTreeAttributes] = useState(false);
   const [colorConfig, setColorConfig] = useState<ColorConfig>({
-    mode: 'solid',
-    color1: '#ffffff',
+    mode: 'split',
+    color1: '#ef4444',
     color2: '#ffffff'
   });
   const [treeAttributes, setTreeAttributes] = useState<TreeAttributes>({

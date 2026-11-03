@@ -31,7 +31,7 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
   zoom = 1, 
   expandedNodes, 
   onToggleNodeExpansion,
-  colorConfig = { mode: 'solid', color1: '#ffffff', color2: '#ffffff' },
+  colorConfig = { mode: 'split', color1: '#ef4444', color2: '#ffffff' },
   onTreeRefresh,
   regressionFlag = 0
 }) => {
