@@ -647,6 +647,16 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     return connections;
   };
 
+  // SVG text has no automatic ellipsis. Estimate width without depending on browser measurement.
+  const truncateText = (text: string, maxWidth: number, fontSize: number) => {
+    const widthOf = (value: string) => Array.from(value).reduce((width, char) =>
+      width + fontSize * (/[^\u0000-\u00ff]/.test(char) ? 1 : /[MW@%]/.test(char) ? 0.9 : /[il.,' :]/.test(char) ? 0.3 : 0.65), 0);
+    if (widthOf(text) <= maxWidth) return text;
+    const characters = Array.from(text);
+    while (characters.length && widthOf(characters.join('') + '…') > maxWidth) characters.pop();
+    return characters.join('') + '…';
+  };
+
   // Render individual node
   const renderNode = (node: any) => {
     if (node.x === undefined || node.y === undefined) return null;
@@ -663,14 +673,11 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
     const eventRate = nodeData.event_rate || 0;
     const eventRatePercent = (eventRate * 100).toFixed(1);
     const count = nodeData.count || 0;
-    const events = nodeData.events || 0;
-    const nonEvents = nodeData.non_events || 0;
-    
     // Format the value based on regression flag
     const displayValue = regressionFlag === 1 
       ? eventRate.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : eventRatePercent + '%';
-    const displayLabel = regressionFlag === 1 ? 'Average:' : 'Event Rate:';
+    const displayLabel = regressionFlag === 1 ? 'Average' : 'Event rate';
 
     const x = node.x + svgDimensions.offsetX;
     const y = node.y + svgDimensions.offsetY;
@@ -682,122 +689,82 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
         onContextMenu={(e) => handleNodeRightClick(e, nodeData.node_number)}
         className="cursor-context-menu"
       >
-        {/* Node rectangle */}
-        {colorConfig.mode === 'split' && typeof nodeColor === 'object' ? (
-          // Split color mode - render two rectangles with straight line split
-          <>
-            {/* Primary color rectangle (left side) - no rounded corners */}
-            <rect
-              x={x}
-              y={y}
-              width={(nodeColor.splitPercentage / 100) * 200}
-              height={120}
-              fill={nodeColor.primary}
-              stroke="none"
-            />
-            {/* Secondary color rectangle (right side) - no rounded corners */}
-            <rect
-              x={x + (nodeColor.splitPercentage / 100) * 200}
-              y={y}
-              width={200 - (nodeColor.splitPercentage / 100) * 200}
-              height={120}
-              fill={nodeColor.secondary}
-              stroke="none"
-            />
-            {/* Border around entire node - with rounded corners */}
-            <rect
-              x={x}
-              y={y}
-              width={200}
-              height={120}
-              rx={8}
-              ry={8}
-              fill="none"
-              stroke={colorConfig.color1 === '#ffffff' ? 'hsl(0 65% 51%)' : colorConfig.color1}
-              strokeWidth="1"
-            />
-          </>
-        ) : (
-          // Solid or gradient color mode
-          <rect
-            x={x}
-            y={y}
-            width={200}
-            height={120}
-            rx={8}
-            ry={8}
-            fill={typeof nodeColor === 'string' ? nodeColor : '#ffffff'}
-            stroke={colorConfig.color1 === '#ffffff' ? 'hsl(0 65% 51%)' : colorConfig.color1}
-            strokeWidth="1"
-            className="drop-shadow-sm"
-          />
+        {/* Keep the 200 x 120 footprint so connectors and tree layout stay unchanged. */}
+        <rect
+          x={x} y={y} width={200} height={120} rx={8}
+          fill="#ffffff" stroke="#cbd5e1" strokeWidth={1}
+          className="drop-shadow-sm"
+        />
+
+        {/* The custom label is the title; unlabeled cards use their node number. */}
+        <text
+          x={x + 12} y={y + 22}
+          fontSize={12} fontWeight={600}
+          fill={nodeData.node_label ? '#800020' : '#334155'}
+        >
+          <title>{nodeData.node_label || `Node ${nodeData.node_number}`}</title>
+          {truncateText(nodeData.node_label || `Node ${nodeData.node_number}`, nodeData.node_label ? 104 : 176, 12)}
+        </text>
+        {nodeData.node_label && (
+          <text x={x + 188} y={y + 22} textAnchor="end" fontSize={9} fill="#64748b">
+            NODE {nodeData.node_number}
+          </text>
         )}
 
-        {/* Node number - smaller font */}
-        <text
-          x={x + 100}
-          y={y + 20}
-          textAnchor="middle"
-          className="text-xs font-medium fill-slate-600"
-        >
-          Node {nodeData.node_number || 'N/A'}
-        </text>
-
-
-            {/* Variable: list_values with truncation and hover tooltip */}
-            {nodeData.variable && nodeData.list_values && nodeData.node_number !== 1 && (() => {
-              // Build full text once
-              const rawList = Array.isArray(nodeData.list_values)
-                ? nodeData.list_values.join(', ')
-                : String(nodeData.list_values);
-              const fullText = `${nodeData.variable}: ${nodeData.missing === 1 ? 'Missing, ' : ''}${rawList}`.trim();
-              // Truncate to fit within 200px node width (approximate char cap)
-              const MAX_CHARS = 28;
-              const displayText = fullText.length > MAX_CHARS ? fullText.slice(0, MAX_CHARS) + '...' : fullText;
-
-              return (
-                <text
-                  x={x + 100}
-                  y={y + 38}
-                  textAnchor="middle"
-                  className="text-xs font-medium fill-slate-700 cursor-help"
-                >
-                  <title>{fullText}</title>
-                  {displayText}
-                </text>
-              );
-            })()}
-
-        {/* Records count - with blank line spacing */}
-        <text
-          x={x + 100}
-          y={y + 60}
-          textAnchor="middle"
-          className="text-xs font-medium fill-slate-700"
-        >
-          # of records: {count.toLocaleString()}
-        </text>
-
-        {/* Event rate / Average */}
-        <text
-          x={x + 100}
-          y={y + 80}
-          textAnchor="middle"
-          className="text-xs font-medium fill-slate-700"
-        >
-          {displayLabel} {displayValue}
-        </text>
-
-        {/* Node label - at the bottom */}
-        {nodeData.node_label && (
-          <text
-            x={x + 100}
-            y={y + 100}
-            textAnchor="middle"
-            className="text-xs font-bold fill-blue-600"
-          >
-            {nodeData.node_label}
+        {/* Keep the full variable and rule available in native SVG tooltips. */}
+        {nodeData.variable && nodeData.node_number !== 1 && (
+          <text x={x + 12} y={y + 43} fontSize={11} fontWeight={600} fill="#334155">
+            <title>{nodeData.variable}</title>
+            {truncateText(String(nodeData.variable), 176, 11)}
           </text>
+        )}
+        {nodeData.variable && nodeData.list_values && nodeData.node_number !== 1 && (() => {
+          const rawList = Array.isArray(nodeData.list_values)
+            ? nodeData.list_values.join(', ')
+            : String(nodeData.list_values);
+          const rule = `${nodeData.missing === 1 ? 'Missing, ' : ''}${rawList}`;
+          return (
+            <text x={x + 12} y={y + 58} fontSize={10} fill="#64748b" className="cursor-help">
+              <title>{`${nodeData.variable}: ${rule}`}</title>
+              {truncateText(rule, 176, 10)}
+            </text>
+          );
+        })()}
+
+        <text x={x + 12} y={y + 79} fontSize={9} fill="#64748b">Records</text>
+        <text x={x + 188} y={y + 79} textAnchor="end" fontSize={9} fill="#64748b">
+          {displayLabel}
+        </text>
+        <text x={x + 12} y={y + 97} fontSize={14} fontWeight={600} fill="#1e293b">
+          <title>{count.toLocaleString()}</title>
+          {truncateText(count.toLocaleString(), 80, 14)}
+        </text>
+        <text x={x + 188} y={y + 97} textAnchor="end" fontSize={14} fontWeight={600} fill="#1e293b">
+          <title>{displayValue}</title>
+          {truncateText(displayValue, 80, 14)}
+        </text>
+
+        {/* Preserve the existing color modes in an inset strip, away from text. */}
+        <rect x={x + 12} y={y + 107} width={176} height={5} rx={2.5} fill="#f1f5f9" />
+        {colorConfig.mode === 'split' && typeof nodeColor === 'object' ? (
+          <>
+            <rect
+              x={x + 12} y={y + 107}
+              width={(nodeColor.splitPercentage / 100) * 176} height={5}
+              fill={nodeColor.primary}
+            />
+            <rect
+              x={x + 12 + (nodeColor.splitPercentage / 100) * 176} y={y + 107}
+              width={176 - (nodeColor.splitPercentage / 100) * 176} height={5}
+              fill={nodeColor.secondary}
+            />
+            <rect x={x + 12} y={y + 107} width={176} height={5} rx={2.5} fill="none" stroke="#e2e8f0" strokeWidth={0.5} />
+          </>
+        ) : (
+          <rect
+            x={x + 12} y={y + 107} width={176} height={5} rx={2.5}
+            fill={typeof nodeColor === 'string' ? nodeColor : '#ffffff'}
+          />
         )}
 
         {/* Expand/Collapse button for parent nodes */}
