@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate, useLocation } from "react-router-dom";
-import { RedBoxLogo } from "./RedBoxLogo";
+import coverPage from "@/assets/cover_page.png";
 import { authService } from "@/services/authService";
 
 export const LoginForm = () => {
@@ -58,16 +58,12 @@ export const LoginForm = () => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-subtle p-4">
       <div className="w-full max-w-md">
         <Card className="shadow-card border-0">
-          <CardHeader className="text-center pb-8">
-            <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-gradient-primary flex items-center justify-center">
-              <RedBoxLogo size={24} className="text-white" />
-            </div>
-            <CardTitle className="text-2xl font-semibold text-foreground">
-              Decision Tree Builder
-            </CardTitle>
-            <CardDescription className="text-muted-foreground">
-              Sign in to start building interactive decision trees
-            </CardDescription>
+          <CardHeader className="p-0 pb-8">
+            <img
+              src={coverPage}
+              alt="Bosco Decision Trees"
+              className="block h-auto w-full rounded-t-lg"
+            />
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-6">
