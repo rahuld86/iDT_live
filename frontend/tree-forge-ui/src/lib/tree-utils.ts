@@ -27,3 +27,32 @@ export const truncateText = (text: string, maxWidth: number, fontSize: number) =
   while (length && widths[length] + ellipsisWidth > maxWidth) length--;
   return characters.slice(0, length).join('') + '…';
 };
+
+/**
+ * Format a continuous-variable bound without hiding meaningful small values.
+ * Values below one retain the first significant decimal and one decimal after it.
+ */
+export const formatContinuousBound = (value: unknown): string | null => {
+  if (value === null || value === undefined || value === '') return null;
+
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+
+  const absoluteValue = Math.abs(numericValue);
+  if (absoluteValue === 0) return '0.00';
+  if (absoluteValue > 10) return numericValue.toFixed(0);
+  if (absoluteValue >= 1) return numericValue.toFixed(1);
+
+  const decimalPlaces = Math.min(
+    100,
+    Math.max(2, 1 - Math.floor(Math.log10(absoluteValue))),
+  );
+  return numericValue.toFixed(decimalPlaces);
+};
+
+/** Return an interval label only when both continuous bounds are usable. */
+export const formatContinuousRange = (lowerBound: unknown, upperBound: unknown): string | null => {
+  const lower = formatContinuousBound(lowerBound);
+  const upper = formatContinuousBound(upperBound);
+  return lower !== null && upper !== null ? `[${lower}, ${upper}]` : null;
+};

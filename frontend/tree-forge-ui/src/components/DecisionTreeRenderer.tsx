@@ -7,7 +7,7 @@ import ForceSplitDialog from './ForceSplitDialog';
 import EditSplitDialog from './EditSplitDialog';
 import AddLabelDialog from './AddLabelDialog';
 import { apiService } from '@/services/api';
-import { indexChildren, truncateText } from '@/lib/tree-utils';
+import { formatContinuousRange, indexChildren, truncateText } from '@/lib/tree-utils';
 
 interface TreeNode {
   data: NodeMasterData;
@@ -679,11 +679,15 @@ const DecisionTreeRenderer: React.FC<DecisionTreeRendererProps> = ({
             {truncateText(String(nodeData.variable), 176, 11)}
           </text>
         )}
-        {nodeData.variable && nodeData.list_values && nodeData.node_number !== 1 && (() => {
-          const rawList = Array.isArray(nodeData.list_values)
-            ? nodeData.list_values.join(', ')
-            : String(nodeData.list_values);
-          const rule = `${nodeData.missing === 1 ? 'Missing, ' : ''}${rawList}`;
+        {nodeData.variable && nodeData.node_number !== 1 && (() => {
+          const continuousRange = formatContinuousRange(nodeData.lower_bound, nodeData.upper_bound);
+          const rawList = nodeData.list_values
+            ? (Array.isArray(nodeData.list_values) ? nodeData.list_values.join(', ') : String(nodeData.list_values))
+            : '';
+          const rangeOrValues = continuousRange || rawList;
+          if (!rangeOrValues && nodeData.missing !== 1) return null;
+
+          const rule = `${nodeData.missing === 1 ? 'Missing' : ''}${nodeData.missing === 1 && rangeOrValues ? ', ' : ''}${rangeOrValues}`;
           return (
             <text x={x + 12} y={y + 58} fontSize={10} fill="#64748b" className="cursor-help">
               <title>{`${nodeData.variable}: ${rule}`}</title>

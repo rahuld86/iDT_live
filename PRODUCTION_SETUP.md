@@ -18,7 +18,7 @@ Deployment files:
   without printing tokens, hashes, or secrets.
 - backend/systemd.service.example: starts start.sh; no self-stopping pre-start hooks.
 - backend/nginx.conf.example: static frontend from /var/www/decision-tree and
-  localhost /api proxy, 600 MB upload cap and 300-second proxy timeouts.
+  localhost /api proxy, no nginx upload cap, and 300-second proxy timeouts.
 
 The application Python is separate from Ubuntu's system Python. Recreating venv
 does not require replacing .env or deleting datasets. S3 import/export supports

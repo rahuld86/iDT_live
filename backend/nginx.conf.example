@@ -32,8 +32,8 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Increase client body size for file uploads (~600MB to match MAX_UPLOAD_SIZE)
-    client_max_body_size 600M;
+    # 0 disables nginx's request-body size check.
+    client_max_body_size 0;
     
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;

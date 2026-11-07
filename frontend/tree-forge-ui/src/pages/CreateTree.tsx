@@ -69,17 +69,6 @@ const CreateTree = () => {
         return;
       }
       
-      // Check file size (limit to 10MB)
-      const maxSize = 10 * 1024 * 1024; // 10MB
-      if (file.size > maxSize) {
-        toast({
-          title: "File Too Large",
-          description: "Please select a CSV file smaller than 10MB.",
-          variant: "destructive",
-        });
-        return;
-      }
-      
       setSelectedFile(file);
       setFileUrl(""); // Clear URL when file is selected
       
@@ -396,7 +385,7 @@ const CreateTree = () => {
   return (
     <div className="min-h-[calc(100vh-var(--app-header-height))] bg-gradient-subtle">
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <main className={`${currentStep === "preview" ? "max-w-none" : "max-w-4xl"} mx-auto px-4 sm:px-6 lg:px-8 py-12`}>
         {/* Navigation Header */}
         <div className="flex justify-end items-center mb-8">
         </div>

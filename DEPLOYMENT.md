@@ -129,7 +129,6 @@ SESSION_CLEANUP_INTERVAL=3600
 DF_STORE_BACKEND=disk
 DF_STORE_DIR='./df_store'
 DF_CACHE_MAX_BYTES=2147483648
-MAX_UPLOAD_SIZE=629145600
 AWS_REGION=ap-south-1  # use your bucket's actual region
 ```
 
@@ -266,8 +265,9 @@ sudo systemctl enable --now nginx
 sudo systemctl reload nginx
 ```
 
-The nginx template permits 600 MB request bodies and uses 300-second proxy
-timeouts. Keep those consistent with MAX_UPLOAD_SIZE and GUNICORN_TIMEOUT.
+The nginx template does not impose a request-body size cap and uses 300-second
+proxy timeouts. Adjust `GUNICORN_TIMEOUT` if exceptionally large imports need
+more processing time.
 Do not expose Gunicorn's port through the EC2 security group.
 
 ```bash
@@ -336,7 +336,7 @@ retention management. Keep backups of settings and required source datasets.
 | Wrong username/password | Use scripts/check_login.py below; reset the intended user and restart. |
 | Redis 503 | Check redis-server, REDIS_HOST/PORT/PASSWORD and redis-cli ping. |
 | Session data expired (400) | Upload the dataset again; check TTL and df_store availability. |
-| Oversized upload (413) | Align nginx client_max_body_size and MAX_UPLOAD_SIZE. |
+| Oversized upload (413) | Check for a size cap imposed by the hosting platform or another proxy. |
 | Worker timeout | Tune GUNICORN_TIMEOUT and proxy timeouts to measured workload. |
 | nginx 500 / permission denied | Serve assets from /var/www; check root and nginx error log. |
 | S3 access denied | Check role, bucket/prefix policy, region, KMS and overriding static credentials. |

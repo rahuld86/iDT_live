@@ -192,10 +192,10 @@ app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'change-this-secret-k
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES', 86400))  # 24 hours default
 jwt = JWTManager(app)
 
-# Raise the maximum request body size to ~600MB (MAX_UPLOAD_SIZE). Bodies above
-# this cap make Flask raise RequestEntityTooLarge, handled as HTTP 413 by the
-# @app.errorhandler(413) below (Requirements 8.1, 8.2).
-app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_SIZE', 629145600))
+# Do not impose an application-level upload size cap. Deployment platforms may
+# still enforce their own infrastructure limits, which the 413 handler below
+# formats as JSON when Flask receives the request.
+app.config['MAX_CONTENT_LENGTH'] = None
 
 # Import auth utilities
 from auth import verify_user
@@ -288,9 +288,8 @@ def handle_storage_error(e):
       friends) -> HTTP 500 including the underlying storage error context.
     * Anything else -> HTTP 500 with the error message (unchanged default).
 
-    A Werkzeug ``HTTPException`` (e.g. ``RequestEntityTooLarge`` -> 413, raised
-    when ``MAX_CONTENT_LENGTH`` is exceeded while an endpoint touches
-    ``request.files``/``request.form``) is re-raised so Flask's registered
+    A Werkzeug ``HTTPException`` (e.g. ``RequestEntityTooLarge`` -> 413 from an
+    explicitly configured deployment limit) is re-raised so Flask's registered
     error handlers produce the correct response (the broad ``except Exception``
     in endpoints must not swallow it into a generic 500).
     """
@@ -318,10 +317,8 @@ def handle_storage_error(e):
 def handle_payload_too_large(error):
     """Return a JSON body for oversized uploads (HTTP 413).
 
-    Flask raises ``werkzeug.exceptions.RequestEntityTooLarge`` (413)
-    automatically once ``MAX_CONTENT_LENGTH`` is exceeded (configured in task
-    17.2). This handler formats that as a JSON error so the response contract is
-    defined now (Requirement 8.2)."""
+    This handler also covers request-size limits applied outside the app and
+    formats the response as JSON."""
     return jsonify({"error": "Payload Too Large"}), 413
 
 @app.route('/api/test', methods=['GET'])

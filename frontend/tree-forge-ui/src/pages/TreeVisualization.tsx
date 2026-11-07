@@ -640,9 +640,13 @@ FROM your_table;
   };
 
   // Expand/Collapse all functionality
-  const handleExpandAll = () => {
+  const expandAllNodes = () => {
     const allNodeNumbers = nodeMaster.map(node => node.node_number);
     setExpandedNodes(new Set(allNodeNumbers));
+  };
+
+  const handleExpandAll = () => {
+    expandAllNodes();
   };
 
   const handleCollapseAll = () => {
@@ -651,6 +655,9 @@ FROM your_table;
 
   // Snapshot functionality
   const handleSnapshot = () => {
+    // The capture is initiated from the export dialog, so expand before opening it
+    // to guarantee the complete tree has rendered by the time it is captured.
+    expandAllNodes();
     setExportType("snapshot");
     setExportDialogOpen(true);
   };

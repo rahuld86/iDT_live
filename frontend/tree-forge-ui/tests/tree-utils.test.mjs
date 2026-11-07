@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/lib/tree-utils.ts', import.meta.url)
 const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { indexChildren, truncateText } = await import(
+const { formatContinuousBound, formatContinuousRange, indexChildren, truncateText } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
 );
 
@@ -53,4 +53,19 @@ test('long labels reserve space for the ellipsis', () => {
 test('Unicode truncation preserves complete code points', () => {
   assert.equal(truncateText('审批😀', 24, 12), '审…');
   assert.equal(truncateText('😀😀😀', 24, 12), '😀…');
+});
+
+test('continuous bounds preserve significant decimal places for small values', () => {
+  assert.equal(formatContinuousBound(11), '11');
+  assert.equal(formatContinuousBound(8.7324), '8.7');
+  assert.equal(formatContinuousBound(0.354633), '0.35');
+  assert.equal(formatContinuousBound(0.0354633), '0.035');
+  assert.equal(formatContinuousBound(0.0304633), '0.030');
+  assert.equal(formatContinuousBound(-0.001), '-0.0010');
+  assert.equal(formatContinuousBound('Parent'), null);
+});
+
+test('continuous range requires both numeric bounds', () => {
+  assert.equal(formatContinuousRange(0.0304633, 8.7324), '[0.030, 8.7]');
+  assert.equal(formatContinuousRange(null, 8.7324), null);
 });
